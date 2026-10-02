@@ -2335,6 +2335,62 @@ func TestManager_RequestScopedNotFoundStopsRetryWithoutSuspendingAuth(t *testing
 	}
 }
 
+// A Claude thread lives on the account that created it, so thread_not_found must
+// reach the client (which replays the conversation) instead of rotating
+// credentials or putting the model into the generic 12h not-found cooldown.
+func TestManager_ClaudeThreadNotFoundStopsRetryWithoutCooldown(t *testing.T) {
+	const threadNotFound = `{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the requested previous_message_id.","details":{"error_code":"thread_not_found"}}}`
+	m := NewManager(nil, nil, nil)
+	executor := &authFallbackExecutor{
+		id: "claude",
+		executeErrors: map[string]error{
+			"aa-thread-auth": &Error{HTTPStatus: http.StatusNotFound, Message: threadNotFound},
+		},
+	}
+	m.RegisterExecutor(executor)
+
+	model := "claude-thread-test-model"
+	threadAuth := &Auth{ID: "aa-thread-auth", Provider: "claude"}
+	otherAuth := &Auth{ID: "bb-other-auth", Provider: "claude"}
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(threadAuth.ID, "claude", []*registry.ModelInfo{{ID: model}})
+	reg.RegisterClient(otherAuth.ID, "claude", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(threadAuth.ID)
+		reg.UnregisterClient(otherAuth.ID)
+	})
+
+	for _, auth := range []*Auth{threadAuth, otherAuth} {
+		if _, errRegister := m.Register(context.Background(), auth); errRegister != nil {
+			t.Fatalf("register %s: %v", auth.ID, errRegister)
+		}
+	}
+
+	_, errExecute := m.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute == nil {
+		t.Fatal("expected thread_not_found error")
+	}
+	if errResult, ok := errExecute.(*Error); !ok || errResult.HTTPStatus != http.StatusNotFound {
+		t.Fatalf("error = %#v, want 404 *Error", errExecute)
+	}
+
+	if got := executor.ExecuteCalls(); len(got) != 1 || got[0] != threadAuth.ID {
+		t.Fatalf("execute calls = %v, want only %s", got, threadAuth.ID)
+	}
+
+	updated, ok := m.GetByID(threadAuth.ID)
+	if !ok || updated == nil {
+		t.Fatal("expected thread auth to remain registered")
+	}
+	if updated.Unavailable || !updated.NextRetryAfter.IsZero() {
+		t.Fatalf("thread auth was suspended: unavailable=%v nextRetryAfter=%v", updated.Unavailable, updated.NextRetryAfter)
+	}
+	if state := updated.ModelStates[model]; state != nil && !state.NextRetryAfter.IsZero() {
+		t.Fatalf("thread auth model cooled down until %v", state.NextRetryAfter)
+	}
+}
+
 func TestManager_MarkResult_RequestFaultBodyDoesNotCooldownModelOrAuth(t *testing.T) {
 	previous := quotaCooldownDisabled.Load()
 	quotaCooldownDisabled.Store(false)

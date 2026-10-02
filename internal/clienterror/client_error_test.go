@@ -140,6 +140,18 @@ func TestIsRequestFaultStructuredIdentifiers(t *testing.T) {
 	}
 }
 
+func TestIsRequestFaultClaudeThreadNotFound(t *testing.T) {
+	err := errors.New(`{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the requested ` + "`previous_message_id`" + `.","details":{"error_code":"thread_not_found"}}}`)
+	if !IsRequestFault(http.StatusNotFound, err) {
+		t.Fatal("thread_not_found was not classified as a request fault")
+	}
+
+	other := errors.New(`{"type":"error","error":{"type":"not_found_error","message":"missing","details":{"error_code":"something_else"}}}`)
+	if IsRequestFault(http.StatusNotFound, other) {
+		t.Fatal("unrelated not_found_error was classified as a request fault")
+	}
+}
+
 func TestIsRequestFault(t *testing.T) {
 	tests := []struct {
 		name   string
