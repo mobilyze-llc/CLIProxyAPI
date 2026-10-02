@@ -185,7 +185,10 @@ routing:
     disable-cooling: false
 
     # When true, persist per-auth cooldown status as .cds files next to auth files.
-    # Default is false; when false, cooldown status is kept in memory only.
+    # The latest observed quota (rate-limit headers from Claude/Codex responses) is saved
+    # with it, at most once a minute, so quota-aware routing such as soonest-reset and the
+    # management quota view keep their data across restarts.
+    # Default is false; when false, cooldown status and observed quota are kept in memory only.
     save-cooldown-status: false
 
     # Cooldown duration in seconds for transient upstream errors (408/500/502/503/504/520-526).

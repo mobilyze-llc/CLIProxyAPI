@@ -72,7 +72,8 @@ type Config struct {
 	// DisableCooling disables auth/model cooldown scheduling when true unless a credential or provider overrides it.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
-	// SaveCooldownStatus persists runtime cooldown status next to auth files when true.
+	// SaveCooldownStatus persists runtime cooldown status, and the latest observed quota
+	// snapshot, next to auth files when true.
 	SaveCooldownStatus bool `yaml:"save-cooldown-status" json:"save-cooldown-status"`
 
 	// TransientErrorCooldownSeconds controls cooldowns for transient upstream errors (408/500/502/503/504/520-526).

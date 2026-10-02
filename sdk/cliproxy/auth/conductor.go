@@ -146,19 +146,21 @@ type Manager struct {
 	store                     Store
 	cooldownStore             CooldownStateStore
 	pendingCooldownStateStore CooldownStateStore
-	executors                 map[string]ProviderExecutor
-	selector                  Selector
-	hook                      Hook
-	resultPolicy              atomic.Pointer[resultPolicyHolder]
-	mu                        sync.RWMutex
-	selectorMu                sync.Mutex
-	configCooldownMu          sync.Mutex
-	syncSchedulerMu           sync.Mutex
-	structuralEpoch           atomic.Uint64
-	syncedVersion             atomic.Uint64
-	auths                     map[string]*Auth
-	authEpochs                map[string]uint64
-	scheduler                 *authScheduler
+	// observationPersistedAt throttles saving passive quota observations; guarded by mu.
+	observationPersistedAt time.Time
+	executors              map[string]ProviderExecutor
+	selector               Selector
+	hook                   Hook
+	resultPolicy           atomic.Pointer[resultPolicyHolder]
+	mu                     sync.RWMutex
+	selectorMu             sync.Mutex
+	configCooldownMu       sync.Mutex
+	syncSchedulerMu        sync.Mutex
+	structuralEpoch        atomic.Uint64
+	syncedVersion          atomic.Uint64
+	auths                  map[string]*Auth
+	authEpochs             map[string]uint64
+	scheduler              *authScheduler
 	// pluginScheduler runs outside m.mu before falling back to native selection.
 	pluginScheduler PluginScheduler
 	// homeRuntimeAuths retains legacy session auth lookups for non-execution callers.
