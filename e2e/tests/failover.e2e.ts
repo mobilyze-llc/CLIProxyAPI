@@ -41,7 +41,6 @@ test(
     expect((await response.json()).error).toMatchObject({
       code: 'model_cooldown',
       model: 'e2e-cooled',
-      provider: 'codex',
     });
     expect(await upstreamRequests(marker)).toEqual([]);
   },

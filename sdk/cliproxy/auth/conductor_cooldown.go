@@ -323,6 +323,14 @@ func (m *Manager) RestoreCooldownStates(ctx context.Context) error {
 
 	m.mu.Lock()
 	for _, record := range records {
+		if m.restoreQuotaObservationLocked(record) {
+			if auth := m.auths[strings.TrimSpace(record.AuthID)]; auth != nil {
+				snapshotsByID[auth.ID] = auth.Clone()
+			}
+		}
+		if record.Status == cooldownStateStatusObserved {
+			continue
+		}
 		if strings.TrimSpace(record.Model) == "" {
 			authLevelRecords = append(authLevelRecords, record)
 			continue
@@ -611,7 +619,7 @@ func (m *Manager) cooldownStateRecordsSnapshot() []CooldownStateRecord {
 
 	m.mu.RLock()
 	for _, auth := range m.auths {
-		records = append(records, m.cooldownStateRecordsForAuthLocked(auth, now)...)
+		records = append(records, withQuotaObservations(auth, m.cooldownStateRecordsForAuthLocked(auth, now))...)
 	}
 	m.mu.RUnlock()
 
@@ -644,6 +652,76 @@ func (m *Manager) cooldownStateRecordsForAuthLocked(auth *Auth, now time.Time) [
 		return records[i].Model < records[j].Model
 	})
 	return records
+}
+
+// withQuotaObservations attaches each passive quota observation to the
+// persisted record for the same auth/model, adding an observation-only record
+// where no cooldown exists. Stores key records by auth and model, so one record
+// carries both. Change detection does not use this; MarkResult saves whenever it
+// records an observation.
+func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []CooldownStateRecord {
+	if auth == nil || auth.ID == "" || auth.Disabled || auth.Status == StatusDisabled {
+		return records
+	}
+	attach := func(model string, quota QuotaState, updatedAt time.Time) {
+		if quota.ObservedAt.IsZero() || len(quota.Signals) == 0 {
+			return
+		}
+		observation := quota.Clone()
+		for i := range records {
+			if records[i].Model == model {
+				records[i].Quota.ObservedAt = observation.ObservedAt
+				records[i].Quota.Signals = observation.Signals
+				return
+			}
+		}
+		records = append(records, CooldownStateRecord{
+			Provider:  strings.TrimSpace(auth.Provider),
+			AuthID:    auth.ID,
+			AuthFile:  cooldownAuthFile(auth),
+			Model:     model,
+			Status:    cooldownStateStatusObserved,
+			Quota:     QuotaState{ObservedAt: observation.ObservedAt, Signals: observation.Signals},
+			UpdatedAt: updatedAt,
+		})
+	}
+	attach("", auth.Quota, auth.UpdatedAt)
+	for model, state := range auth.ModelStates {
+		if state != nil && strings.TrimSpace(model) != "" {
+			attach(strings.TrimSpace(model), state.Quota, state.UpdatedAt)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Model < records[j].Model
+	})
+	return records
+}
+
+// restoreQuotaObservationLocked merges a saved observation into the auth or model
+// state. The newest observation wins, so a live response after startup is kept.
+func (m *Manager) restoreQuotaObservationLocked(record CooldownStateRecord) bool {
+	quota := record.Quota
+	if quota.ObservedAt.IsZero() || len(quota.Signals) == 0 {
+		return false
+	}
+	auth := m.auths[strings.TrimSpace(record.AuthID)]
+	if auth == nil || auth.Disabled || auth.Status == StatusDisabled || !ProviderSupportsQuotaObservation(auth.Provider) {
+		return false
+	}
+	observation := QuotaState{ObservedAt: quota.ObservedAt, Signals: quota.Clone().Signals}
+	model := strings.TrimSpace(record.Model)
+	if model == "" {
+		before := auth.Quota.ObservedAt
+		auth.Quota = mergeQuotaObservation(auth.Quota, observation)
+		return !auth.Quota.ObservedAt.Equal(before)
+	}
+	state := ensureModelState(auth, model)
+	if state == nil {
+		return false
+	}
+	before := state.Quota.ObservedAt
+	state.Quota = mergeQuotaObservation(state.Quota, observation)
+	return !state.Quota.ObservedAt.Equal(before)
 }
 
 func cooldownStateRecordsEqual(a, b []CooldownStateRecord) bool {
@@ -1009,10 +1087,11 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		auth.Generation++
 		auth.UpdatedAt = now
 
+		observed := false
 		if !result.SkipQuotaObservation {
-			auth.Quota.ObserveResponseHeadersForProvider(result.Provider, responseHeaders, now)
-			if modelState != nil {
-				modelState.Quota.ObserveResponseHeadersForProvider(result.Provider, responseHeaders, now)
+			observed = auth.Quota.ObserveResponseHeadersForProvider(result.Provider, responseHeaders, now)
+			if modelState != nil && modelState.Quota.ObserveResponseHeadersForProvider(result.Provider, responseHeaders, now) {
+				observed = true
 			}
 		}
 
@@ -1021,6 +1100,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		if trackCooldownState {
 			cooldownRecordsAfter := m.cooldownStateRecordsForAuthLocked(auth, now)
 			cooldownStateChanged = !cooldownStateRecordsEqual(cooldownRecordsBefore, cooldownRecordsAfter)
+			cooldownStateChanged = cooldownStateChanged || observed
 		}
 	}
 	m.mu.Unlock()

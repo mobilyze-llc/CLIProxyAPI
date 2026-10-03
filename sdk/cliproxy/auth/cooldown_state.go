@@ -29,6 +29,12 @@ type CooldownStateRecord struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
+// cooldownStateStatusObserved marks a record that carries only a passive quota
+// observation (Quota.ObservedAt and Quota.Signals) and no active cooldown. Saving
+// observations lets quota-aware routing and the management quota view keep their
+// data across restarts instead of relearning it from live traffic.
+const cooldownStateStatusObserved = "observed"
+
 // CooldownStateStore persists runtime cooldown state independently from auth tokens.
 type CooldownStateStore interface {
 	Load(context.Context) ([]CooldownStateRecord, error)

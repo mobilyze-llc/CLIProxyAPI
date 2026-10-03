@@ -12,28 +12,43 @@ writeFileSync('.e2e/mock.json', JSON.stringify({ url }));
 
 const dir = mkdtempSync(join(tmpdir(), 'cliproxy-e2e-'));
 mkdirSync(join(dir, 'auths'));
-const codex = (key, model, priority = 0) => ({
+const models = (names) => [names].flat().map((name) => ({ name }));
+const codex = (key, names, priority = 0) => ({
   'api-key': key,
   'base-url': `${url}/v1`,
   priority,
-  models: [{ name: model }],
+  models: models(names),
 });
-// YAML accepts JSON. The failover and cooldown tests own their models and credentials;
-// failover-a has the higher priority, so the proxy tries it first.
+const claude = (key, names) => ({ 'api-key': key, 'base-url': url, models: models(names) });
+// A selector scenario's credentials share its model; `<model>-<credential>` reaches one of them.
+const scenario = (make, model, credentials) =>
+  credentials.map((name) => make(`${model}-${name}`, [model, `${model}-${name}`]));
+// YAML accepts JSON. The failover, cooldown and selector tests own their models and
+// credentials; failover-a has the higher priority, so the proxy tries it first.
 const config = {
   host: '127.0.0.1',
   port: Number(process.env.PORT),
   'auth-dir': join(dir, 'auths'),
   'api-keys': ['e2e-client-key'],
+  routing: { strategy: 'soonest-reset', 'session-affinity': true },
+  'save-cooldown-status': true,
   'codex-api-key': [
     codex('codex-main', 'gpt-5.6-sol'),
     codex('failover-a-limited', 'e2e-failover', 1),
     codex('failover-b', 'e2e-failover'),
     codex('cooled-a-limited', 'e2e-cooled'),
     codex('cooled-b-limited', 'e2e-cooled'),
+    ...scenario(codex, 'e2e-s1', ['a', 'b', 'c']),
+    ...scenario(codex, 'e2e-s2', ['a', 'b']),
+    ...scenario(codex, 'e2e-s5', ['known', 'unknown']),
+    ...scenario(codex, 'e2e-s7', ['a', 'b']),
+    ...scenario(codex, 'e2e-s8', ['a', 'b']),
   ],
   'claude-api-key': [
-    { 'api-key': 'claude-main', 'base-url': url, models: [{ name: 'claude-sonnet-4-6' }] },
+    // Cloaks every client except confirmed Claude Code, so messages.e2e.ts can tell them apart.
+    { ...claude('claude-main', 'claude-sonnet-4-6'), cloak: { mode: 'always' } },
+    ...scenario(claude, 'e2e-s3', ['a', 'b']),
+    ...scenario(claude, 'e2e-s5c', ['x', 'y', 'z']),
   ],
 };
 writeFileSync(join(dir, 'config.yaml'), JSON.stringify(config, null, 2));

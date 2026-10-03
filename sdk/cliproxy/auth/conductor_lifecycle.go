@@ -230,6 +230,11 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		if len(auth.ModelStates) == 0 && len(existing.ModelStates) > 0 {
 			auth.ModelStates = existing.ModelStates
 		}
+		// A reloaded credential file carries no quota observation. Keep the last
+		// one so soonest-reset ranking survives a token refresh.
+		if auth.Quota.ObservedAt.IsZero() {
+			auth.Quota = mergeQuotaObservation(auth.Quota, existing.Quota)
+		}
 		credChanged := CredentialsChanged(existing, auth)
 		if credChanged {
 			if hasUnauthorizedAuthFailure(existing) || (auth.LastError != nil && isUnauthorizedError(auth.LastError)) {

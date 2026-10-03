@@ -126,7 +126,13 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
-  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first
+  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, soonest-reset
+  # soonest-reset prefers the credential whose weekly (7-day) quota window resets soonest, so
+  # quota is used before it expires. Reset times are learned from Claude/Codex response headers.
+  # A credential with an exhausted window is skipped until that window resets. An unknown Claude
+  # reset is tried first; an unknown Codex reset last. Other providers behave like fill-first.
+  # Run soonest-reset with session-affinity: true. Without affinity every request is re-ranked,
+  # so a conversation can move between accounts.
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.
@@ -182,7 +188,10 @@ routing:
     disable-cooling: false
 
     # When true, persist per-auth cooldown status as .cds files next to auth files.
-    # Default is false; when false, cooldown status is kept in memory only.
+    # The latest observed quota (rate-limit headers from Claude/Codex responses) is saved
+    # with it on every observation, so quota-aware routing such as soonest-reset and the
+    # management quota view keep their data across restarts.
+    # Default is false; when false, cooldown status and observed quota are kept in memory only.
     save-cooldown-status: false
 
     # Cooldown duration in seconds for transient upstream errors (408/500/502/503/504/520-526).

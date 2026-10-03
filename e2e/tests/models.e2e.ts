@@ -17,7 +17,9 @@ test(
     });
     expect(response.status).toBe(200);
     const { data } = await response.json();
-    expect(data.map((model: { id: string }) => model.id).sort()).toEqual([
+    const ids: string[] = data.map((model: { id: string }) => model.id);
+    // Selector scenarios (tests/selector.e2e.ts) add their own e2e-s* models.
+    expect(ids.filter((id) => !id.startsWith('e2e-s')).sort()).toEqual([
       'claude-sonnet-4-6',
       'e2e-cooled',
       'e2e-failover',
