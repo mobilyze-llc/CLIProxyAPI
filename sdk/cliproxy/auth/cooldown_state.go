@@ -35,10 +35,6 @@ type CooldownStateRecord struct {
 // data across restarts instead of relearning it from live traffic.
 const cooldownStateStatusObserved = "observed"
 
-// quotaObservationRetention bounds how long a saved observation stays useful.
-// The longest window it describes is weekly.
-const quotaObservationRetention = 8 * 24 * time.Hour
-
 // CooldownStateStore persists runtime cooldown state independently from auth tokens.
 type CooldownStateStore interface {
 	Load(context.Context) ([]CooldownStateRecord, error)

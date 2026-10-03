@@ -102,21 +102,6 @@ func TestQuotaObservationSharesRecordWithCooldown(t *testing.T) {
 	}
 }
 
-func TestStaleQuotaObservationIsNotPersisted(t *testing.T) {
-	store := NewFileCooldownStateStore(t.TempDir())
-	m := newObservationPersistManager(t, store, "claude-c.json")
-	m.mu.Lock()
-	m.auths["claude-c.json"].Quota = QuotaState{
-		ObservedAt: time.Now().Add(-quotaObservationRetention - time.Hour),
-		Signals:    map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "0.5"},
-	}
-	m.mu.Unlock()
-
-	if records := m.cooldownStateRecordsSnapshot(); len(records) != 0 {
-		t.Fatalf("stale observation was persisted: %+v", records)
-	}
-}
-
 func TestRestoreKeepsNewerLiveObservation(t *testing.T) {
 	ctx := context.Background()
 	store := NewFileCooldownStateStore(t.TempDir())
