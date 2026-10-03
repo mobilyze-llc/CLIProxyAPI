@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { expect, test } from 'e2e';
 import { expectTrace, live } from '../lib/live.ts';
 import { input } from '../lib/proxy.ts';
@@ -69,14 +69,28 @@ test(
   'live: Claude Code shape, streaming Messages on Haiku ends with message_stop',
   onLive,
   async () => {
+    const session = randomUUID();
+    // The four signals DetectClaudeCodeRequest requires to confirm a Claude Code client.
+    const userId = {
+      device_id: randomBytes(32).toString('hex'),
+      account_uuid: '',
+      session_id: session,
+    };
     const { response, signal } = await live('/v1/messages?beta=true', {
       body: {
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 16,
         stream: true,
         messages: [{ role: 'user', content: say }],
+        metadata: { user_id: JSON.stringify(userId) },
       },
-      headers: { ...anthropic, 'X-Claude-Code-Session-Id': randomUUID() },
+      headers: {
+        ...anthropic,
+        'anthropic-beta': 'claude-code-20250219',
+        'user-agent': 'claude-cli/2.1.280 (external, cli)',
+        'x-app': 'cli',
+        'X-Claude-Code-Session-Id': session,
+      },
     });
     expect(response.status).toBe(200);
     expectTrace(response);
