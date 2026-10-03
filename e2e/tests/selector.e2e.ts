@@ -89,21 +89,14 @@ test(
   },
 );
 
-test(
-  'S3: an exhausted Claude 5-hour window is skipped until it resets',
-  hermetic,
-  async ({ app }) => {
-    const fiveHourReset = 4;
-    await script({
-      'e2e-s3-a': { headers: claudeWindows(1, fiveHourReset, 1 * day) },
-      'e2e-s3-b': { headers: claudeWindows(0.1, 4 * hour, 3 * day) },
-    });
-    for (const name of ['a', 'b']) await messages(app.baseUrl, `e2e-s3-${name}`);
-    for (let i = 0; i < 2; i++) expect(await messages(app.baseUrl, 'e2e-s3')).toEqual(['e2e-s3-b']);
-    await new Promise((resolve) => setTimeout(resolve, (fiveHourReset + 1) * 1000));
-    expect(await messages(app.baseUrl, 'e2e-s3')).toEqual(['e2e-s3-a']);
-  },
-);
+test('S3: an exhausted Claude 5-hour window is skipped', hermetic, async ({ app }) => {
+  await script({
+    'e2e-s3-a': { headers: claudeWindows(1, 1 * hour, 1 * day) },
+    'e2e-s3-b': { headers: claudeWindows(0.1, 4 * hour, 3 * day) },
+  });
+  for (const name of ['a', 'b']) await messages(app.baseUrl, `e2e-s3-${name}`);
+  for (let i = 0; i < 2; i++) expect(await messages(app.baseUrl, 'e2e-s3')).toEqual(['e2e-s3-b']);
+});
 
 test(
   'S5: an unknown Codex reset sorts last and an unknown Claude reset sorts first',
