@@ -375,3 +375,51 @@ func TestSoonestResetSelector_ConcurrentObservationAndPick(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func codexWeeklyAuthWithToken(id, token string, resetAt time.Time) *Auth {
+	auth := codexWeeklyAuth(id, 50, resetAt)
+	auth.Status = StatusActive
+	auth.Metadata = map[string]any{"access_token": token}
+	return auth
+}
+
+// A token refresh reloads the credential file without quota; the observation and the pick survive.
+func TestSoonestResetSelector_ObservationSurvivesCredentialReplacement(t *testing.T) {
+	now := time.Now()
+	manager := newSoonestResetManager(t, nil,
+		codexWeeklyAuthWithToken("soonest-replace-a", "token-a", now.Add(3*day)),
+		codexWeeklyAuthWithToken("soonest-replace-b", "token-b", now.Add(day)),
+	)
+	if got := pickSession(t, manager, "before-refresh"); got != "soonest-replace-b" {
+		t.Fatalf("new session before refresh = %q, want soonest-replace-b", got)
+	}
+
+	reloaded := &Auth{ID: "soonest-replace-b", Provider: "codex", Status: StatusActive, Metadata: map[string]any{"access_token": "token-b-refreshed"}}
+	if _, err := manager.Update(context.Background(), reloaded); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	updated, _ := manager.GetByID("soonest-replace-b")
+	if len(updated.Quota.Signals) == 0 || updated.Quota.ObservedAt.IsZero() {
+		t.Fatalf("quota observation after refresh = %+v, want the earlier observation", updated.Quota)
+	}
+	if got := pickSession(t, manager, "after-refresh"); got != "soonest-replace-b" {
+		t.Fatalf("new session after refresh = %q, want soonest-replace-b", got)
+	}
+}
+
+// An observation carried by the incoming credential replaces the old one.
+func TestSoonestResetSelector_IncomingObservationReplacesOld(t *testing.T) {
+	now := time.Now()
+	manager := newSoonestResetManager(t, nil,
+		codexWeeklyAuthWithToken("soonest-incoming-a", "token-a", now.Add(3*day)),
+		codexWeeklyAuthWithToken("soonest-incoming-b", "token-b", now.Add(day)),
+	)
+
+	incoming := codexWeeklyAuthWithToken("soonest-incoming-b", "token-b-refreshed", now.Add(5*day))
+	if _, err := manager.Update(context.Background(), incoming); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if got := pickSession(t, manager, "after-update"); got != "soonest-incoming-a" {
+		t.Fatalf("new session after update = %q, want soonest-incoming-a", got)
+	}
+}
