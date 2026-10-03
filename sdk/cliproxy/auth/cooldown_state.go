@@ -39,10 +39,6 @@ const cooldownStateStatusObserved = "observed"
 // The longest window it describes is weekly.
 const quotaObservationRetention = 8 * 24 * time.Hour
 
-// quotaObservationPersistInterval throttles observation saves: every upstream
-// response refreshes the observation, but disk writes happen at most this often.
-const quotaObservationPersistInterval = time.Minute
-
 // CooldownStateStore persists runtime cooldown state independently from auth tokens.
 type CooldownStateStore interface {
 	Load(context.Context) ([]CooldownStateRecord, error)

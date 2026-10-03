@@ -2,13 +2,9 @@ package auth
 
 import (
 	"context"
-	"net/http"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 )
 
 func newObservationPersistManager(t *testing.T, store CooldownStateStore, authID string) *Manager {
@@ -148,50 +144,5 @@ func TestRestoreKeepsNewerLiveObservation(t *testing.T) {
 	restored, _ := second.GetByID("claude-d.json")
 	if got := restored.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"]; got != "0.1" {
 		t.Fatalf("utilization = %q, want the newer live value 0.1", got)
-	}
-}
-
-type countingCooldownStore struct {
-	saves atomic.Int32
-}
-
-func (s *countingCooldownStore) Load(context.Context) ([]CooldownStateRecord, error) {
-	return nil, nil
-}
-
-func (s *countingCooldownStore) Save(context.Context, []CooldownStateRecord) error {
-	s.saves.Add(1)
-	return nil
-}
-
-func TestMarkResultThrottlesObservationSaves(t *testing.T) {
-	store := &countingCooldownStore{}
-	m := newObservationPersistManager(t, store, "claude-e.json")
-	baseline := store.saves.Load()
-
-	markWithSignals := func(utilization string) {
-		ctx := internallogging.WithResponseHeadersHolder(context.Background())
-		internallogging.SetResponseHeaders(ctx, http.Header{
-			"Anthropic-Ratelimit-Unified-7d-Utilization": []string{utilization},
-		})
-		m.MarkResult(ctx, Result{AuthID: "claude-e.json", Provider: "claude", Model: "claude-opus", Success: true})
-	}
-
-	markWithSignals("0.10")
-	if got := store.saves.Load() - baseline; got != 1 {
-		t.Fatalf("saves after first observation = %d, want 1", got)
-	}
-	markWithSignals("0.11")
-	markWithSignals("0.12")
-	if got := store.saves.Load() - baseline; got != 1 {
-		t.Fatalf("saves within the throttle interval = %d, want 1", got)
-	}
-
-	m.mu.Lock()
-	m.observationPersistedAt = time.Now().Add(-quotaObservationPersistInterval)
-	m.mu.Unlock()
-	markWithSignals("0.13")
-	if got := store.saves.Load() - baseline; got != 2 {
-		t.Fatalf("saves after the throttle interval = %d, want 2", got)
 	}
 }

@@ -657,8 +657,8 @@ func (m *Manager) cooldownStateRecordsForAuthLocked(auth *Auth, now time.Time) [
 // withQuotaObservations attaches each fresh passive quota observation to the
 // persisted record for the same auth/model, adding an observation-only record
 // where no cooldown exists. Stores key records by auth and model, so one record
-// carries both. Change detection does not use this, so observations alone never
-// trigger a save outside the MarkResult throttle.
+// carries both. Change detection does not use this; MarkResult saves whenever it
+// records an observation.
 func withQuotaObservations(auth *Auth, records []CooldownStateRecord, now time.Time) []CooldownStateRecord {
 	if auth == nil || auth.ID == "" || auth.Disabled || auth.Status == StatusDisabled {
 		return records
@@ -1100,10 +1100,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		if trackCooldownState {
 			cooldownRecordsAfter := m.cooldownStateRecordsForAuthLocked(auth, now)
 			cooldownStateChanged = !cooldownStateRecordsEqual(cooldownRecordsBefore, cooldownRecordsAfter)
-			if cooldownStateChanged || (observed && now.Sub(m.observationPersistedAt) >= quotaObservationPersistInterval) {
-				m.observationPersistedAt = now
-				cooldownStateChanged = true
-			}
+			cooldownStateChanged = cooldownStateChanged || observed
 		}
 	}
 	m.mu.Unlock()

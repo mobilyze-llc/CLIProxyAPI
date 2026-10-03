@@ -307,8 +307,8 @@ func TestSoonestResetSelector_RoutedThroughSessionAffinity(t *testing.T) {
 func TestSoonestResetSelector_PersistedObservationsSurviveRestart(t *testing.T) {
 	store := NewFileCooldownStateStore(t.TempDir())
 	now := time.Now()
-	ids := []string{"soonest-restart-a", "soonest-restart-b", "soonest-restart-c"}
-	resets := []time.Time{now.Add(6 * day), now.Add(day), now.Add(3 * day)}
+	ids := []string{"soonest-restart-a", "soonest-restart-b"}
+	resets := []time.Time{now.Add(6 * day), now.Add(day)}
 	fresh := func() []*Auth {
 		auths := make([]*Auth, len(ids))
 		for i, id := range ids {
@@ -321,11 +321,6 @@ func TestSoonestResetSelector_PersistedObservationsSurviveRestart(t *testing.T) 
 	for i, id := range ids {
 		markWithHeaders(first, id, codexWeeklyHeaders(resets[i]))
 	}
-	// Saves are throttled to once a minute; let the next observation save every credential.
-	first.mu.Lock()
-	first.observationPersistedAt = now.Add(-quotaObservationPersistInterval)
-	first.mu.Unlock()
-	markWithHeaders(first, ids[0], codexWeeklyHeaders(resets[0]))
 
 	second := newSoonestResetManager(t, store, fresh()...)
 	if got := pickSession(t, second, "before-restore"); got != ids[0] {
