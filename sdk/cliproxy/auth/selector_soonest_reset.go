@@ -113,11 +113,12 @@ func observedQuotaWindows(auth *Auth) []quotaWindow {
 		mostUsed := 0.0
 		for _, name := range []string{"Primary", "Secondary"} {
 			prefix := "X-Codex-" + name + "-"
-			minutes, errMinutes := strconv.ParseInt(signal(prefix+"Window-Minutes"), 10, 64)
 			resetAt := parseQuotaResetAt(signal(prefix+"Reset-At"), signal(prefix+"Reset-After-Seconds"), auth.Quota.ObservedAt)
-			if errMinutes != nil || resetAt.IsZero() {
+			if resetAt.IsZero() {
 				continue
 			}
+			// A missing window length keeps the window; it only means the length is unknown.
+			minutes, _ := strconv.ParseInt(signal(prefix+"Window-Minutes"), 10, 64)
 			used, _ := strconv.ParseFloat(signal(prefix+"Used-Percent"), 64)
 			mostUsed = max(mostUsed, used)
 			windows = append(windows, quotaWindow{weekly: minutes >= weeklyWindowMinutes, usedPercent: used, resetAt: resetAt})

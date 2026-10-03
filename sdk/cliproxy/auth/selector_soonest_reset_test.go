@@ -205,6 +205,19 @@ func TestSoonestResetSelectorPick_ExhaustionGate(t *testing.T) {
 	}
 }
 
+// A Codex window without a Window-Minutes header still gates the credential when exhausted.
+func TestSoonestResetSelectorPick_CodexWindowWithoutLengthStillGates(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	primary := codexWindowSignals("Primary", 0, 100, now.Add(time.Hour))
+	delete(primary, "X-Codex-Primary-Window-Minutes")
+	a := codexAuthWithSignals("a", primary, codexWindowSignals("Secondary", weeklyWindowMinutes, 40, now.Add(day)))
+	if got := pickSoonestReset(t, "codex", a, codexWeeklyAuth("b", 10, now.Add(3*day))); got != "b" {
+		t.Fatalf("Pick() = %q, want b", got)
+	}
+}
+
 // S5: an unknown Claude reset sorts first, an unknown or passed Codex reset sorts last, and a
 // passed Claude reset rolls forward by whole weeks.
 func TestSoonestResetSelectorPick_UnknownResets(t *testing.T) {
