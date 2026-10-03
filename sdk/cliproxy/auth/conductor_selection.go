@@ -65,7 +65,7 @@ func (m *Manager) PluginSchedulerWantsAcrossPriorities() bool {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector, *SoonestResetSelector:
+	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector:
 		return true
 	default:
 		return false

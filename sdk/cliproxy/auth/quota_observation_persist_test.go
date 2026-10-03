@@ -52,11 +52,11 @@ func TestQuotaObservationsSurviveRestart(t *testing.T) {
 	if !ok {
 		t.Fatal("auth missing after restore")
 	}
-	if got := weeklyQuotaResetAt(restored, "", now); !got.Equal(weeklyReset) {
-		t.Fatalf("credential weekly reset = %v, want %v", got, weeklyReset)
+	if got, want := restored.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Reset"], strconv.FormatInt(weeklyReset.Unix(), 10); got != want {
+		t.Fatalf("credential weekly reset = %q, want %q", got, want)
 	}
-	if got := weeklyQuotaResetAt(restored, "claude-fable-5", now); !got.Equal(fableReset) {
-		t.Fatalf("fable weekly reset = %v, want %v", got, fableReset)
+	if got, want := restored.ModelStates["claude-fable-5"].Quota.Signals["Anthropic-Ratelimit-Unified-7d_oi-Reset"], strconv.FormatInt(fableReset.Unix(), 10); got != want {
+		t.Fatalf("fable weekly reset = %q, want %q", got, want)
 	}
 	if restored.Unavailable || restored.ModelStates["claude-fable-5"].Unavailable {
 		t.Fatal("restoring an observation must not make the auth or model unavailable")
