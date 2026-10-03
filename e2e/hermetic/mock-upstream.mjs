@@ -1,9 +1,12 @@
 // Mock Codex and Claude upstream. A credential whose key ends in `-limited` answers Codex
 // 429 usage_limit_reached; every other request gets a complete SSE stream (or a Claude JSON
 // message when the request does not stream). GET /_mock/requests returns what it received.
+// POST /_mock/script takes `{ [key]: { headers?, limited? } }`: `headers` replaces that
+// credential's quota headers and `limited: true` makes its Codex requests answer 429.
 import { createServer } from 'node:http';
 
 const requests = [];
+const scripts = new Map();
 const resetAt = () => Math.floor(Date.now() / 1000) + 3600;
 
 const sse = (res, headers, events) => {
@@ -13,7 +16,7 @@ const sse = (res, headers, events) => {
 };
 
 const codex = (res, key, body) => {
-  if (key.endsWith('-limited')) {
+  if (key.endsWith('-limited') || scripts.get(key)?.limited) {
     res.writeHead(429, { 'content-type': 'application/json' });
     const error = { type: 'usage_limit_reached', message: 'You have hit your usage limit.' };
     res.end(JSON.stringify({ error: { ...error, resets_at: resetAt(), resets_in_seconds: 3600 } }));
@@ -30,7 +33,7 @@ const codex = (res, key, body) => {
   const usage = { input_tokens: 5, output_tokens: 3, total_tokens: 8 };
   sse(
     res,
-    {
+    scripts.get(key)?.headers ?? {
       'x-codex-primary-used-percent': '10',
       'x-codex-primary-window-minutes': '300',
       'x-codex-primary-reset-at': String(resetAt()),
@@ -53,8 +56,8 @@ const codex = (res, key, body) => {
   );
 };
 
-const claude = (res, body) => {
-  const headers = {
+const claude = (res, key, body) => {
+  const headers = scripts.get(key)?.headers ?? {
     'anthropic-ratelimit-unified-status': 'allowed',
     'anthropic-ratelimit-unified-5h-status': 'allowed',
     'anthropic-ratelimit-unified-5h-utilization': '0.1',
@@ -104,9 +107,14 @@ export const startMock = () =>
         'Bearer ',
         '',
       );
+      if (req.url === '/_mock/script') {
+        for (const [scripted, script] of Object.entries(body)) scripts.set(scripted, script);
+        res.writeHead(204).end();
+        return;
+      }
       requests.push({ path: req.url, headers: req.headers, body, key });
       if (req.url === '/v1/responses') codex(res, key, body);
-      else claude(res, body);
+      else claude(res, key, body);
     });
     server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`));
   });

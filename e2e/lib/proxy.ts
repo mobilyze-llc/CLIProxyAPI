@@ -30,3 +30,14 @@ export async function upstreamRequests(marker: string): Promise<UpstreamRequest[
   const all: UpstreamRequest[] = await (await fetch(`${mockUrl()}/_mock/requests`)).json();
   return all.filter((request) => JSON.stringify(request.body).includes(marker));
 }
+
+export type Script = { headers?: Record<string, string>; limited?: boolean };
+
+/** Sets what the mock answers for each credential key (hermetic/mock-upstream.mjs). */
+export async function script(scripts: Record<string, Script>): Promise<void> {
+  const response = await fetch(`${mockUrl()}/_mock/script`, {
+    method: 'POST',
+    body: JSON.stringify(scripts),
+  });
+  if (!response.ok) throw new Error(`mock script failed: ${response.status}`);
+}
