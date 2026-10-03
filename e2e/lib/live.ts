@@ -10,9 +10,14 @@ type Request = { body?: unknown; headers?: Record<string, string>; keyless?: boo
 /**
  * Sends one request to CLIPROXY_LIVE_URL and classifies failures that are not the product's:
  * missing inputs and a rejected key are configuration (exit 2); an unreachable proxy and a
- * provider 429 or 5xx are infrastructure (exit 3). `known` lists statuses the test asserts itself.
+ * provider 429 or 5xx are infrastructure (exit 3). `known` accepts a failure the test asserts
+ * itself, matched on status and body.
  */
-export async function live(path: string, request: Request = {}, known: number[] = []) {
+export async function live(
+  path: string,
+  request: Request = {},
+  known?: (status: number, body: string) => boolean,
+) {
   const base = process.env.CLIPROXY_LIVE_URL;
   if (!base) throw new AgentError('TEST_SETUP_FAILED', 'CLIPROXY_LIVE_URL is not set');
   const key = process.env.CLIPROXY_CLIENT_KEY;
@@ -42,9 +47,12 @@ export async function live(path: string, request: Request = {}, known: number[] 
   if (!request.keyless && status === 401) {
     throw new AgentError('AUTH_CREDENTIAL_INVALID', `${path} rejected CLIPROXY_CLIENT_KEY (401)`);
   }
-  if ((status === 429 || status >= 500) && !known.includes(status)) {
-    const text = (await response.text()).slice(0, 300);
-    throw new AgentError('ENVIRONMENT_UNAVAILABLE', `${path} answered ${status}: ${text}`);
+  if (status === 429 || status >= 500) {
+    const text = await response.clone().text();
+    if (!known?.(status, text)) {
+      const excerpt = text.slice(0, 300);
+      throw new AgentError('ENVIRONMENT_UNAVAILABLE', `${path} answered ${status}: ${excerpt}`);
+    }
   }
   return { response, signal };
 }
