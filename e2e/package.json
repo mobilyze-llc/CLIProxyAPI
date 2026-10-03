@@ -1,0 +1,20 @@
+{
+  "name": "cliproxyapi-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "lint": "oxlint --deny-warnings ."
+  },
+  "devDependencies": {
+    "e2e": "0.16.0",
+    "oxfmt": "0.71.0",
+    "oxlint": "1.86.0",
+    "zod": "4.6.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@11.21.0"
+}

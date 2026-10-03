@@ -19,3 +19,35 @@ jobs:
           cache: true
       - run: go build ./...
       - run: go test ./...
+
+  e2e-hermetic:
+    runs-on: ubuntu-latest
+    env:
+      E2E_TELEMETRY_DISABLED: "1"
+      MASTRA_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -o e2e/.bin/cli-proxy-api ./cmd/server
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: e2e/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: e2e/pnpm-lock.yaml
+      - run: pnpm --dir e2e install --frozen-lockfile
+      - run: pnpm --dir e2e run fmt:check
+      - run: pnpm --dir e2e run lint
+      - run: pnpm --dir e2e exec e2e run --target hermetic --output .e2e/ci
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-hermetic-report
+          path: |
+            e2e/.e2e/ci/report.json
+            e2e/.e2e/logs/hermetic.log
