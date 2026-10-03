@@ -108,36 +108,18 @@ test('live: Responses on claude-sonnet-4-6 completes', onLive, async () => {
   expect((await response.json()).status).toBe('completed');
 });
 
-// OSWE-278's response as captured from studio2. A genuine rate limit carries a descriptive
-// message, so it stays an infrastructure failure (exit 3).
-const isOswe278 = (status: number, body: string) => {
-  try {
-    const { error } = JSON.parse(body);
-    return status === 429 && error?.type === 'rate_limit_error' && error?.message === 'Error';
-  } catch {
-    return false;
-  }
-};
-
-// Known failure: this asserts the bug. When OSWE-278 is fixed the status changes and the test
-// fails visibly; then assert 200 here instead.
-test(
-  'live: OSWE-278 known failure, native Messages on claude-sonnet-4-6 returns 429',
-  onLive,
-  async () => {
-    const { response } = await live(
-      '/v1/messages',
-      {
-        body: {
-          model: 'claude-sonnet-4-6',
-          max_tokens: 16,
-          messages: [{ role: 'user', content: say }],
-        },
-        headers: anthropic,
-      },
-      isOswe278,
-    );
-    expect(response.status).toBe(429);
-    expect((await response.json()).error).toEqual({ type: 'rate_limit_error', message: 'Error' });
-  },
-);
+test('live: native Messages on claude-sonnet-4-6 completes', onLive, async () => {
+  const { response } = await live('/v1/messages', {
+    body: {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: say }],
+    },
+    headers: anthropic,
+  });
+  expect(response.status).toBe(200);
+  expectTrace(response);
+  const message = await response.json();
+  expect(message.type).toBe('message');
+  expect(message.stop_reason).toBe('end_turn');
+});
