@@ -2667,15 +2667,11 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			return nil
 		})
 
-		// Start server reader loop so server processes control frames.
-		readErrCh := make(chan error, 1)
+		// The reader answers control frames until the client request arrives.
+		requestRead := make(chan struct{})
 		go func() {
-			for {
-				if _, _, errRead := conn.ReadMessage(); errRead != nil {
-					readErrCh <- errRead
-					return
-				}
-			}
+			_, _, _ = conn.ReadMessage()
+			close(requestRead)
 		}()
 
 		// Wait until client has entered writeMessage and is actively holding writeMu.
@@ -2701,6 +2697,8 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			return
 		}
 
+		// Reply only after the request arrives, so the reply and close cannot race the held write.
+		<-requestRead
 		// Now send terminal response.
 		respPayload := []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
@@ -2766,12 +2764,11 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			return nil
 		})
 
+		// The reader answers control frames until the client request arrives.
+		requestRead := make(chan struct{})
 		go func() {
-			for {
-				if _, _, errRead := conn.ReadMessage(); errRead != nil {
-					return
-				}
-			}
+			_, _, _ = conn.ReadMessage()
+			close(requestRead)
 		}()
 
 		// Wait until client has entered writeMessage on sessionless path.
@@ -2797,6 +2794,8 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			return
 		}
 
+		// Reply only after the request arrives, so the reply and close cannot race the held write.
+		<-requestRead
 		respPayload := []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))
@@ -2858,12 +2857,11 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_NonstreamSessionless(t *testi
 			return nil
 		})
 
+		// The reader answers control frames until the client request arrives.
+		requestRead := make(chan struct{})
 		go func() {
-			for {
-				if _, _, errRead := conn.ReadMessage(); errRead != nil {
-					return
-				}
-			}
+			_, _, _ = conn.ReadMessage()
+			close(requestRead)
 		}()
 
 		// Wait until client has entered writeMessage on nonstream path.
@@ -2889,6 +2887,8 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_NonstreamSessionless(t *testi
 			return
 		}
 
+		// Reply only after the request arrives, so the reply and close cannot race the held write.
+		<-requestRead
 		respPayload := []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))

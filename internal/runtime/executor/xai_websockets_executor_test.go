@@ -2214,12 +2214,11 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			return nil
 		})
 
+		// The reader answers control frames until the client request arrives.
+		requestRead := make(chan struct{})
 		go func() {
-			for {
-				if _, _, errReadLoop := conn.ReadMessage(); errReadLoop != nil {
-					return
-				}
-			}
+			_, _, _ = conn.ReadMessage()
+			close(requestRead)
 		}()
 
 		select {
@@ -2242,6 +2241,8 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			return
 		}
 
+		// Reply only after the request arrives, so the reply and close cannot race the held write.
+		<-requestRead
 		respPayload := []byte(`{"type":"response.done","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))
@@ -2310,12 +2311,11 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			return nil
 		})
 
+		// The reader answers control frames until the client request arrives.
+		requestRead := make(chan struct{})
 		go func() {
-			for {
-				if _, _, errReadLoop := conn.ReadMessage(); errReadLoop != nil {
-					return
-				}
-			}
+			_, _, _ = conn.ReadMessage()
+			close(requestRead)
 		}()
 
 		select {
@@ -2338,6 +2338,8 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			return
 		}
 
+		// Reply only after the request arrives, so the reply and close cannot race the held write.
+		<-requestRead
 		respPayload := []byte(`{"type":"response.done","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))
