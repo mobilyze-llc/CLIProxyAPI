@@ -187,7 +187,7 @@ routing:
 
     # When true, persist per-auth cooldown status as .cds files next to auth files.
     # The latest observed quota (rate-limit headers from Claude/Codex responses) is saved
-    # with it, at most once a minute, so quota-aware routing such as soonest-reset and the
+    # with it on every observation, so quota-aware routing such as soonest-reset and the
     # management quota view keep their data across restarts.
     # Default is false; when false, cooldown status and observed quota are kept in memory only.
     save-cooldown-status: false
