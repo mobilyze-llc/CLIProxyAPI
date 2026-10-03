@@ -45,7 +45,8 @@ const config = {
     ...scenario(codex, 'e2e-s8', ['a', 'b']),
   ],
   'claude-api-key': [
-    claude('claude-main', 'claude-sonnet-4-6'),
+    // Cloaks every client except confirmed Claude Code, so messages.e2e.ts can tell them apart.
+    { ...claude('claude-main', 'claude-sonnet-4-6'), cloak: { mode: 'always' } },
     ...scenario(claude, 'e2e-s3', ['a', 'b']),
     ...scenario(claude, 'e2e-s5c', ['x', 'y', 'z']),
   ],
