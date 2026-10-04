@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -51,6 +52,25 @@ func (q *QuotaState) ObserveResponseHeadersForProvider(provider string, headers 
 	q.Signals = next
 	q.ObservedAt = observedAt
 	return true
+}
+
+// ObserveQuotaHeaders records a quota snapshot read outside the request path,
+// such as a usage endpoint, on the registered credential. It touches only the
+// credential-wide observation: counters, availability, cooldown fields and the
+// auth record on disk stay unchanged. A snapshot without quota signals leaves
+// the previous observation in place.
+func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	auth := m.auths[authID]
+	observed := auth != nil && auth.Quota.ObserveResponseHeadersForProvider(auth.Provider, headers, time.Now())
+	m.mu.Unlock()
+	if observed {
+		m.persistCooldownStates(context.Background())
+	}
+	return observed
 }
 
 // ClearObservationSignals removes only passive observation data. It leaves
