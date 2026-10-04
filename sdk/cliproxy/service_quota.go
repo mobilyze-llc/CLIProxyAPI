@@ -2,13 +2,8 @@ package cliproxy
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 
-	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -44,50 +39,30 @@ func (s *Service) startQuotaUsageReads(ctx context.Context) {
 	}()
 }
 
-// readQuotaUsage reads one credential's usage endpoint and records the result. A failed or
-// rejected read leaves the previous observation untouched. The provider's executor sends the
-// read with the client identity of that provider's CLI, so the request carries no headers here.
+// readQuotaUsage reads one credential's usage endpoint and records the result. It decides
+// eligibility: OAuth credentials with a valid access token whose executor implements
+// coreauth.QuotaUsageReader. A failed or rejected read leaves the previous observation untouched.
 func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 	auth, ok := s.coreManager.GetByID(authID)
 	if !ok || auth.AuthKind() != coreauth.AuthKindOAuth || !auth.HasValidAccessToken(time.Now()) {
 		return
 	}
-	var usageURL string
-	var parse func([]byte) http.Header
-	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
-	case "codex":
-		usageURL, parse = helps.CodexUsageURL, helps.ParseCodexUsageHeaders
-	case "claude":
-		usageURL, parse = claudeauth.UsageURL, helps.ParseClaudeUsageHeaders
-	default:
+	exec, ok := s.coreManager.Executor(auth.Provider)
+	if !ok {
+		return
+	}
+	reader, ok := exec.(coreauth.QuotaUsageReader)
+	if !ok {
 		return
 	}
 	readCtx, cancel := context.WithTimeout(ctx, quotaUsageReadTimeout)
 	defer cancel()
-	req, errRequest := http.NewRequestWithContext(readCtx, http.MethodGet, usageURL, nil)
-	if errRequest != nil {
-		return
-	}
-	resp, errDo := s.coreManager.HttpRequest(readCtx, auth, req)
-	if errDo != nil {
-		log.Warnf("quota usage read failed for auth %s: %v", authID, errDo)
-		return
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("quota usage read: close response body: %v", errClose)
-		}
-	}()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		log.Warnf("quota usage read for auth %s returned status %d", authID, resp.StatusCode)
-		return
-	}
-	body, errRead := io.ReadAll(resp.Body)
+	observed, errRead := reader.ReadQuotaUsage(readCtx, auth)
 	if errRead != nil {
 		log.Warnf("quota usage read failed for auth %s: %v", authID, errRead)
 		return
 	}
-	if observed := parse(body); observed != nil {
+	if observed != nil {
 		s.coreManager.ObserveQuotaHeaders(authID, observed)
 	}
 }

@@ -246,9 +246,6 @@ func (e *ClaudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 	if ctx == nil {
 		ctx = req.Context()
 	}
-	if isClaudeOAuthUsageRead(auth, req) {
-		return e.readClaudeOAuthUsage(ctx, auth)
-	}
 	httpReq := req.WithContext(ctx)
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err

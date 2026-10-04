@@ -84,13 +84,7 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 		ctx = req.Context()
 	}
 	httpReq := req.WithContext(ctx)
-	if httpReq.Method == http.MethodGet && httpReq.URL != nil && httpReq.URL.String() == helps.CodexUsageURL {
-		// The usage read carries the identity the credential's inference sends.
-		apiKey, _ := codexCreds(auth)
-		httpReq.Header = make(http.Header)
-		applyCodexIdentityHeaders(httpReq, auth, apiKey, e.cfg, nil)
-		httpReq.Header.Set("Accept", "application/json")
-	} else if err := e.PrepareRequest(httpReq, auth); err != nil {
+	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}
 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
@@ -215,9 +209,11 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	applyCodexIdentityHeaders(r, auth, token, cfg, ginHeaders)
 }
 
-// applyCodexIdentityHeaders sets the credential and client identity every Codex
-// request carries: the bearer token, User-Agent, Originator, ChatGPT account,
-// credential custom headers and cloaking. Inference and the usage read share it.
+// applyCodexIdentityHeaders sets the credential and client identity HTTP inference
+// sends: the bearer token, User-Agent, Originator, ChatGPT account, credential custom
+// headers and cloaking. The usage read calls it without client headers, so with
+// cloaking off and no configured User-Agent, inference forwards the client's
+// User-Agent while the usage read sends the default Codex User-Agent.
 func applyCodexIdentityHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, cfg *config.Config, ginHeaders http.Header) {
 	if strings.TrimSpace(token) != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -235,7 +231,7 @@ func applyCodexIdentityHeaders(r *http.Request, auth *cliproxyauth.Auth, token s
 	}
 	if !isAPIKey {
 		if auth != nil && auth.Metadata != nil {
-			if accountID, ok := auth.Metadata["account_id"].(string); ok {
+			if accountID, ok := auth.Metadata["account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
 				r.Header.Set("Chatgpt-Account-Id", accountID)
 			}
 		}

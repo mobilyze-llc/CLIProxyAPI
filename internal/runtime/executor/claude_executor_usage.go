@@ -3,34 +3,34 @@ package executor
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
-func isClaudeOAuthUsageRead(auth *cliproxyauth.Auth, req *http.Request) bool {
-	return auth != nil && auth.AuthKind() == cliproxyauth.AuthKindOAuth &&
-		req.Method == http.MethodGet && req.URL != nil && req.URL.String() == claudeauth.UsageURL
+var _ cliproxyauth.QuotaUsageReader = (*ClaudeExecutor)(nil)
+
+// ReadQuotaUsage reads the credential's subscription usage the way Claude Code does:
+// through the OAuth control-plane transport with the configured Claude Code User-Agent.
+func (e *ClaudeExecutor) ReadQuotaUsage(ctx context.Context, auth *cliproxyauth.Auth) (http.Header, error) {
+	accessToken, _ := claudeCreds(auth)
+	body, errFetch := e.claudeOAuthUsageService(ctx, auth).FetchOAuthUsage(ctx, accessToken, helps.ClaudeUsageUserAgent(e.cfg))
+	if errFetch != nil {
+		return nil, errFetch
+	}
+	return helps.ParseClaudeUsageHeaders(body), nil
 }
 
-// readClaudeOAuthUsage sends the usage read the way Claude Code does: through the
-// OAuth control-plane transport with the credential's CLI User-Agent. The caller's
-// headers are replaced, so the read carries only the native header set.
-func (e *ClaudeExecutor) readClaudeOAuthUsage(ctx context.Context, auth *cliproxyauth.Auth) (*http.Response, error) {
-	apiKey, _ := claudeCreds(auth)
-	return e.claudeOAuthUsageService(ctx, auth).FetchOAuthUsage(ctx, apiKey, helps.ClaudeUsageUserAgent(e.cfg))
-}
-
-// claudeOAuthUsageService selects the proxy the profile lookup uses. Like
-// helps.NewUtlsHTTPClient, a round tripper injected through the context replaces
-// the transport only when no proxy applies.
+// claudeOAuthUsageService resolves the proxy the way helps.NewUtlsHTTPClient does: the
+// request-scoped override, then the credential proxy, then the global proxy. A round
+// tripper injected through the context replaces the transport only when no proxy applies.
 func (e *ClaudeExecutor) claudeOAuthUsageService(ctx context.Context, auth *cliproxyauth.Auth) *claudeauth.ClaudeAuth {
-	if strings.TrimSpace(auth.ProxyURL) == "" && (e.cfg == nil || strings.TrimSpace(e.cfg.ProxyURL) == "") {
+	proxyURL := helps.EffectiveProxyURL(ctx, e.cfg, auth)
+	if proxyURL == "" {
 		if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
 			return claudeauth.NewClaudeAuthWithRoundTripper(rt)
 		}
 	}
-	return claudeauth.NewClaudeAuthWithProxyURL(e.cfg, auth.ProxyURL)
+	return claudeauth.NewClaudeAuthWithProxyURL(e.cfg, proxyURL)
 }

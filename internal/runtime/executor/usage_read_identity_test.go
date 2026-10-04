@@ -1,18 +1,21 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"io"
+	"net"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -22,26 +25,19 @@ type usageReadCapture struct {
 	header http.Header
 }
 
-// captureUsageRead sends one usage read through the executor and returns what the
-// transport received. The injected round tripper answers every request, so the
-// read cannot reach a real endpoint.
-func captureUsageRead(t *testing.T, httpRequest func(context.Context, *cliproxyauth.Auth, *http.Request) (*http.Response, error), auth *cliproxyauth.Auth, usageURL string) usageReadCapture {
+type quotaUsageReadFunc func(context.Context, *cliproxyauth.Auth) (http.Header, error)
+
+// captureUsageRead runs one usage read and returns what the transport received. The
+// injected round tripper answers every request, so the read cannot reach a real endpoint.
+func captureUsageRead(t *testing.T, read quotaUsageReadFunc, auth *cliproxyauth.Auth) usageReadCapture {
 	t.Helper()
 	var captured []usageReadCapture
 	ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		captured = append(captured, usageReadCapture{method: req.Method, url: req.URL.String(), header: req.Header.Clone()})
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
 	}))
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
-	if errRequest != nil {
-		t.Fatal(errRequest)
-	}
-	resp, errDo := httpRequest(ctx, auth, req)
-	if errDo != nil {
-		t.Fatalf("usage read: %v", errDo)
-	}
-	if errClose := resp.Body.Close(); errClose != nil {
-		t.Fatal(errClose)
+	if _, errRead := read(ctx, auth); errRead != nil {
+		t.Fatalf("usage read: %v", errRead)
 	}
 	if len(captured) != 1 {
 		t.Fatalf("transport received %d requests, want 1", len(captured))
@@ -64,7 +60,7 @@ func TestUsageReadTransportReceivesCLIIdentity(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.ClaudeHeaderDefaults.UserAgent = "claude-cli/2.1.288 (external, cli)"
 
-	claude := captureUsageRead(t, NewClaudeExecutor(cfg).HttpRequest, usageReadOAuthAuth("claude", nil), "https://api.anthropic.com/api/oauth/usage")
+	claude := captureUsageRead(t, NewClaudeExecutor(cfg).ReadQuotaUsage, usageReadOAuthAuth("claude", nil))
 	wantClaude := http.Header{
 		"Accept":          {"application/json, text/plain, */*"},
 		"Content-Type":    {"application/json"},
@@ -81,13 +77,12 @@ func TestUsageReadTransportReceivesCLIIdentity(t *testing.T) {
 		t.Errorf("Claude usage read headers =\n%v\nwant\n%v", claude.header, wantClaude)
 	}
 
-	codex := captureUsageRead(t, NewCodexExecutor(cfg).HttpRequest, usageReadOAuthAuth("codex", nil), "https://chatgpt.com/backend-api/wham/usage")
+	codex := captureUsageRead(t, NewCodexAutoExecutor(cfg).ReadQuotaUsage, usageReadOAuthAuth("codex", nil))
 	wantCodex := http.Header{
 		"Authorization":      {"Bearer tok-codex"},
 		"User-Agent":         {"codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"},
 		"Originator":         {"codex-tui"},
 		"Chatgpt-Account-Id": {"account-1"},
-		"Accept":             {"application/json"},
 	}
 	if codex.method != http.MethodGet || codex.url != "https://chatgpt.com/backend-api/wham/usage" {
 		t.Errorf("Codex usage read = %s %s", codex.method, codex.url)
@@ -97,49 +92,77 @@ func TestUsageReadTransportReceivesCLIIdentity(t *testing.T) {
 	}
 }
 
-// TestCodexUsageReadMatchesInferenceIdentity checks that the usage read sends the
-// User-Agent, Originator and account the inference path sends for the same
-// credential and configuration.
+// TestCodexUsageReadMatchesInferenceIdentity checks the User-Agent and account the
+// usage read sends against literal expectations, next to what HTTP inference sends for
+// the same credential and configuration when the client sends its own User-Agent.
 func TestCodexUsageReadMatchesInferenceIdentity(t *testing.T) {
-	const customUA = "custom-agent/1.0"
+	const (
+		customUA     = "custom-agent/1.0"
+		configuredUA = "codex-configured/2.0"
+		clientUA     = "client-agent/3.0"
+	)
 	cloakingOff := &config.Config{}
 	cloakingOff.Codex.DisableCodexCloaking = true
-	configuredUA := &config.Config{}
-	configuredUA.Codex.DisableCodexCloaking = true
-	configuredUA.CodexHeaderDefaults.UserAgent = "codex-configured/2.0"
+	cloakingOffConfiguredUA := &config.Config{}
+	cloakingOffConfiguredUA.Codex.DisableCodexCloaking = true
+	cloakingOffConfiguredUA.CodexHeaderDefaults.UserAgent = configuredUA
 
 	cases := []struct {
-		name   string
-		cfg    *config.Config
-		attrs  map[string]string
-		wantUA string
+		name            string
+		cfg             *config.Config
+		attrs           map[string]string
+		accountID       string
+		wantUsageUA     string
+		wantInferenceUA string
 	}{
-		{name: "cloaking enabled", cfg: &config.Config{}, wantUA: codexUserAgent},
-		{name: "cloaking enabled overrides credential User-Agent", cfg: &config.Config{}, attrs: map[string]string{"header:User-Agent": customUA}, wantUA: codexUserAgent},
-		{name: "cloaking disabled with credential User-Agent", cfg: cloakingOff, attrs: map[string]string{"header:User-Agent": customUA}, wantUA: customUA},
-		{name: "cloaking disabled with configured User-Agent", cfg: configuredUA, wantUA: "codex-configured/2.0"},
+		{name: "cloaking enabled", cfg: &config.Config{}, accountID: "account-1",
+			wantUsageUA: codexUserAgent, wantInferenceUA: codexUserAgent},
+		{name: "cloaking enabled overrides credential User-Agent", cfg: &config.Config{}, accountID: "account-1",
+			attrs: map[string]string{"header:User-Agent": customUA}, wantUsageUA: codexUserAgent, wantInferenceUA: codexUserAgent},
+		{name: "cloaking disabled with credential User-Agent", cfg: cloakingOff, accountID: "account-1",
+			attrs: map[string]string{"header:User-Agent": customUA}, wantUsageUA: customUA, wantInferenceUA: customUA},
+		{name: "cloaking disabled with configured User-Agent", cfg: cloakingOffConfiguredUA, accountID: "account-1",
+			wantUsageUA: configuredUA, wantInferenceUA: configuredUA},
+		{name: "cloaking disabled without configured User-Agent", cfg: cloakingOff, accountID: "account-1",
+			wantUsageUA: codexUserAgent, wantInferenceUA: clientUA},
+		{name: "empty account id", cfg: &config.Config{}, accountID: "",
+			wantUsageUA: codexUserAgent, wantInferenceUA: codexUserAgent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			auth := usageReadOAuthAuth("codex", tc.attrs)
-			usage := captureUsageRead(t, NewCodexExecutor(tc.cfg).HttpRequest, auth, "https://chatgpt.com/backend-api/wham/usage")
+			auth.Metadata["account_id"] = tc.accountID
+			usage := captureUsageRead(t, NewCodexExecutor(tc.cfg).ReadQuotaUsage, auth)
 
 			inference, errRequest := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 			if errRequest != nil {
 				t.Fatal(errRequest)
 			}
-			apiKey, _ := codexCreds(auth)
-			applyCodexHeaders(inference, auth, apiKey, true, tc.cfg, nil)
+			applyCodexHeaders(inference, auth, "tok-codex", true, tc.cfg, http.Header{"User-Agent": {clientUA}})
 
-			for _, name := range []string{"Authorization", "User-Agent", "Originator", "Chatgpt-Account-Id"} {
-				if got, want := usage.header.Get(name), inference.Header.Get(name); got != want {
-					t.Errorf("usage read %s = %q, inference sends %q", name, got, want)
+			for _, sent := range []struct {
+				name   string
+				header http.Header
+				wantUA string
+			}{{"usage read", usage.header, tc.wantUsageUA}, {"inference", inference.Header, tc.wantInferenceUA}} {
+				if got := sent.header.Get("User-Agent"); got != sent.wantUA {
+					t.Errorf("%s User-Agent = %q, want %q", sent.name, got, sent.wantUA)
+				}
+				if got := sent.header.Get("Authorization"); got != "Bearer tok-codex" {
+					t.Errorf("%s Authorization = %q", sent.name, got)
+				}
+				if got := sent.header.Get("Originator"); got != codexOriginator {
+					t.Errorf("%s Originator = %q, want %q", sent.name, got, codexOriginator)
+				}
+				got, present := sent.header["Chatgpt-Account-Id"]
+				if tc.accountID == "" && present {
+					t.Errorf("%s carries Chatgpt-Account-Id %q for an empty account id", sent.name, got)
+				}
+				if tc.accountID != "" && sent.header.Get("Chatgpt-Account-Id") != tc.accountID {
+					t.Errorf("%s Chatgpt-Account-Id = %q, want %q", sent.name, got, tc.accountID)
 				}
 			}
-			if got := usage.header.Get("User-Agent"); got != tc.wantUA {
-				t.Errorf("usage read User-Agent = %q, want %q", got, tc.wantUA)
-			}
-			for _, name := range []string{"Session-Id", "Version", "X-Codex-Beta-Features", "Content-Type", "Connection"} {
+			for _, name := range []string{"Accept", "Session-Id", "Version", "X-Codex-Beta-Features", "Content-Type", "Connection"} {
 				if got := usage.header.Get(name); got != "" {
 					t.Errorf("usage read carries inference-only header %s = %q", name, got)
 				}
@@ -164,26 +187,128 @@ func TestClaudeUsageReadDecodesCompressedResponse(t *testing.T) {
 			Header: http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"gzip"}},
 			Body:   io.NopCloser(bytes.NewReader(compressed.Bytes()))}, nil
 	}))
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.anthropic.com/api/oauth/usage", nil)
-	if errRequest != nil {
-		t.Fatal(errRequest)
-	}
-	resp, errDo := NewClaudeExecutor(&config.Config{}).HttpRequest(ctx, usageReadOAuthAuth("claude", nil), req)
-	if errDo != nil {
-		t.Fatalf("usage read: %v", errDo)
-	}
-	body, errRead := io.ReadAll(resp.Body)
+	headers, errRead := NewClaudeExecutor(&config.Config{}).ReadQuotaUsage(ctx, usageReadOAuthAuth("claude", nil))
 	if errRead != nil {
-		t.Fatal(errRead)
+		t.Fatalf("usage read: %v", errRead)
 	}
-	if errClose := resp.Body.Close(); errClose != nil {
-		t.Fatal(errClose)
-	}
-	headers := helps.ParseClaudeUsageHeaders(body)
 	if got := headers.Get("Anthropic-Ratelimit-Unified-7d-Utilization"); got != "0.31" {
 		t.Fatalf("parsed 7d utilization = %q, want 0.31 (headers %v)", got, headers)
 	}
-	if got := resp.Header.Get("Content-Encoding"); got != "" {
-		t.Fatalf("decoded response still declares Content-Encoding %q", got)
+}
+
+// TestClaudeUsageReadDialsControlPlaneTLSThroughCredentialProxy sends the usage read
+// through the production transport, with the credential's proxy set to a local CONNECT
+// listener and no context round tripper. The first TLS record in the tunnel must carry
+// no ALPN extension (type 16): the OAuth control-plane ClientHello has none, while the
+// inference ClientHello advertises http/1.1.
+func TestClaudeUsageReadDialsControlPlaneTLSThroughCredentialProxy(t *testing.T) {
+	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
+	if errListen != nil {
+		t.Fatal(errListen)
 	}
+	defer func() { _ = listener.Close() }()
+
+	type tunnel struct {
+		target string
+		record []byte
+		err    error
+	}
+	tunnels := make(chan tunnel, 1)
+	go func() {
+		conn, errAccept := listener.Accept()
+		if errAccept != nil {
+			tunnels <- tunnel{err: errAccept}
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		reader := bufio.NewReader(conn)
+		connect, errConnect := http.ReadRequest(reader)
+		if errConnect != nil {
+			tunnels <- tunnel{err: errConnect}
+			return
+		}
+		if _, errWrite := io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); errWrite != nil {
+			tunnels <- tunnel{err: errWrite}
+			return
+		}
+		header := make([]byte, 5)
+		if _, errRead := io.ReadFull(reader, header); errRead != nil {
+			tunnels <- tunnel{err: errRead}
+			return
+		}
+		payload := make([]byte, binary.BigEndian.Uint16(header[3:5]))
+		if _, errRead := io.ReadFull(reader, payload); errRead != nil {
+			tunnels <- tunnel{err: errRead}
+			return
+		}
+		tunnels <- tunnel{target: connect.Method + " " + connect.Host, record: append(header, payload...)}
+	}()
+
+	auth := usageReadOAuthAuth("claude", nil)
+	auth.ProxyURL = "http://" + listener.Addr().String()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, errRead := NewClaudeExecutor(&config.Config{}).ReadQuotaUsage(ctx, auth); errRead == nil {
+		t.Fatal("usage read succeeded although the tunnel closed during the handshake")
+	}
+	got := <-tunnels
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got.target != "CONNECT api.anthropic.com:443" {
+		t.Fatalf("proxy received %q, want CONNECT api.anthropic.com:443", got.target)
+	}
+	extensions := clientHelloExtensionTypes(t, got.record)
+	if !slices.Contains(extensions, 0) {
+		t.Fatalf("ClientHello extensions %v carry no server_name; the record is not a ClientHello", extensions)
+	}
+	if slices.Contains(extensions, 16) {
+		t.Fatalf("ClientHello extensions %v advertise ALPN, which only the inference profile sends", extensions)
+	}
+}
+
+// clientHelloExtensionTypes lists the extension types of a TLS record holding one ClientHello.
+func clientHelloExtensionTypes(t *testing.T, record []byte) []uint16 {
+	t.Helper()
+	fail := func() { t.Fatalf("malformed ClientHello record %x", record) }
+	if len(record) < 5 || record[0] != 22 {
+		fail()
+	}
+	// Record header (5), handshake header (4), legacy version (2), random (32).
+	offset := 5 + 4 + 2 + 32
+	skip := func(lengthBytes int) {
+		if offset+lengthBytes > len(record) {
+			fail()
+		}
+		length := 0
+		for _, b := range record[offset : offset+lengthBytes] {
+			length = length<<8 | int(b)
+		}
+		offset += lengthBytes + length
+	}
+	skip(1) // legacy session ID
+	skip(2) // cipher suites
+	skip(1) // compression methods
+	if offset+2 > len(record) {
+		fail()
+	}
+	end := offset + 2 + int(binary.BigEndian.Uint16(record[offset:]))
+	offset += 2
+	if end != len(record) {
+		fail()
+	}
+	var types []uint16
+	for offset < end {
+		if offset+4 > end {
+			fail()
+		}
+		types = append(types, binary.BigEndian.Uint16(record[offset:]))
+		offset += 2
+		skip(2)
+	}
+	if offset != end {
+		fail()
+	}
+	return types
 }

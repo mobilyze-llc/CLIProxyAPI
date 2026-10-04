@@ -43,20 +43,6 @@ var claudeOAuthInspectHeaderOrder = []string{
 	"Connection",
 }
 
-// claudeOAuthUsageHeaderOrder is the order Claude Code's Axios API client emits
-// for the subscription usage read, which carries the CLI User-Agent and the
-// OAuth beta instead of the profile lookup's Cache-Control.
-var claudeOAuthUsageHeaderOrder = []string{
-	"Accept",
-	"Content-Type",
-	"User-Agent",
-	"Authorization",
-	"anthropic-beta",
-	"Accept-Encoding",
-	"Host",
-	"Connection",
-}
-
 // claudeOAuthInspectTargets are the authenticated control-plane GET paths that
 // use claudeOAuthInspectHeaderOrder.
 var claudeOAuthInspectTargets = []string{
