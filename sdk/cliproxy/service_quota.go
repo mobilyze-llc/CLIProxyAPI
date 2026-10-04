@@ -40,11 +40,16 @@ func (s *Service) startQuotaUsageReads(ctx context.Context) {
 }
 
 // readQuotaUsage reads one credential's usage endpoint and records the result. It decides
-// eligibility: OAuth credentials with a valid access token whose executor implements
-// coreauth.QuotaUsageReader. A failed or rejected read leaves the previous observation untouched.
+// eligibility: enabled Codex and Claude OAuth credentials with a valid access token whose
+// executor implements coreauth.QuotaUsageReader. The provider check is needed because Go
+// embedding passes the capability on: KimiExecutor embeds ClaudeExecutor, and a Kimi token
+// must never reach Anthropic. A failed or rejected read leaves the previous observation untouched.
 func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 	auth, ok := s.coreManager.GetByID(authID)
-	if !ok || auth.AuthKind() != coreauth.AuthKindOAuth || !auth.HasValidAccessToken(time.Now()) {
+	if !ok || auth.Disabled || auth.AuthKind() != coreauth.AuthKindOAuth || !auth.HasValidAccessToken(time.Now()) {
+		return
+	}
+	if auth.Provider != "codex" && auth.Provider != "claude" {
 		return
 	}
 	exec, ok := s.coreManager.Executor(auth.Provider)
@@ -62,7 +67,5 @@ func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 		log.Warnf("quota usage read failed for auth %s: %v", authID, errRead)
 		return
 	}
-	if observed != nil {
-		s.coreManager.ObserveQuotaHeaders(authID, observed)
-	}
+	s.coreManager.ObserveQuotaHeaders(authID, observed)
 }

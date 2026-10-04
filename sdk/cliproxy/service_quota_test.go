@@ -303,3 +303,44 @@ func TestQuotaUsageSweepRoutesNewSessionToUnusedCredential(t *testing.T) {
 		t.Fatalf("new session went to %v, want [tok-c]: the never-used credential resets soonest", responses)
 	}
 }
+
+// TestQuotaUsageReadSkipsKimiAndDisabledCredentials guards the provider check: KimiExecutor
+// embeds ClaudeExecutor and so implements QuotaUsageReader, yet a Kimi token must never be sent
+// to Anthropic. A disabled Claude credential is not read either; its enabled twin is.
+func TestQuotaUsageReadSkipsKimiAndDisabledCredentials(t *testing.T) {
+	var mu sync.Mutex
+	var tokens []string
+	rt := quotaTestRoundTripper(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		tokens = append(tokens, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
+		mu.Unlock()
+		return quotaTestResponse(req, http.StatusOK, "application/json", `{}`), nil
+	})
+	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", http.RoundTripper(rt))
+	service := &Service{cfg: &config.Config{}, coreManager: coreauth.NewManager(nil, nil, nil)}
+	far := time.Now().Add(240 * time.Hour).Format(time.RFC3339)
+	for _, auth := range []*coreauth.Auth{
+		{ID: "kimi-a", Provider: "kimi", Status: coreauth.StatusActive,
+			Metadata: map[string]any{"type": "kimi", "access_token": "kimi-token", "expired": far}},
+		{ID: "claude-off", Provider: "claude", Status: coreauth.StatusActive, Disabled: true,
+			Metadata: map[string]any{"type": "claude", "access_token": "claude-off-token", "expired": far}},
+		{ID: "claude-on", Provider: "claude", Status: coreauth.StatusActive,
+			Metadata: map[string]any{"type": "claude", "access_token": "claude-on-token", "expired": far}},
+	} {
+		service.ensureExecutorsForAuth(auth)
+		if _, err := service.coreManager.Register(ctx, auth); err != nil {
+			t.Fatalf("register %s: %v", auth.ID, err)
+		}
+	}
+	if exec, ok := service.coreManager.Executor("kimi"); !ok {
+		t.Fatal("kimi executor not registered")
+	} else if _, isReader := exec.(coreauth.QuotaUsageReader); !isReader {
+		t.Fatal("kimi executor no longer implements QuotaUsageReader; the provider check may be obsolete")
+	}
+	for _, id := range []string{"kimi-a", "claude-off", "claude-on"} {
+		service.readQuotaUsage(ctx, id)
+	}
+	if want := []string{"claude-on-token"}; !reflect.DeepEqual(tokens, want) {
+		t.Fatalf("usage reads sent tokens %v, want %v", tokens, want)
+	}
+}
