@@ -81,9 +81,6 @@ type Service struct {
 	// watcherCancel cancels the watcher context.
 	watcherCancel context.CancelFunc
 
-	// quotaReadsCancel stops the quota usage reads.
-	quotaReadsCancel context.CancelFunc
-
 	// authUpdates channel for authentication updates.
 	authUpdates chan watcher.AuthUpdate
 

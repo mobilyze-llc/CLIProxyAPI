@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -221,9 +223,16 @@ func TestQuotaUsageSweepRoutesNewSessionToUnusedCredential(t *testing.T) {
 	for deadline := time.Now().Add(5 * time.Second); !swept() && time.Now().Before(deadline); {
 		time.Sleep(10 * time.Millisecond)
 	}
+	if !swept() {
+		t.Fatal("the sweep did not read and record every credential's usage within 5s")
+	}
 
 	mu.Lock()
-	t.Logf("usage reads: %v", usageReads)
+	reads := append([]string(nil), usageReads...)
+	sort.Strings(reads)
+	if want := []string{"tok-a", "tok-b", "tok-c", "tok-d"}; !reflect.DeepEqual(reads, want) {
+		t.Errorf("usage reads = %v, want one per credential %v", usageReads, want)
+	}
 	if len(unexpected) != 0 {
 		t.Errorf("unexpected upstream traffic during the sweep (refreshes included): %v", unexpected)
 	}
@@ -232,10 +241,22 @@ func TestQuotaUsageSweepRoutesNewSessionToUnusedCredential(t *testing.T) {
 		t.Errorf("token store saves during the sweep = %d, want 0", saves)
 	}
 	cooldownStore.mu.Lock()
-	cdsSaves := cooldownStore.saves
+	cdsSaves, records := cooldownStore.saves, cooldownStore.records
 	cooldownStore.mu.Unlock()
 	if cdsSaves == 0 {
 		t.Error("cooldown state store was not written after the sweep")
+	}
+	savedReset := map[string]string{}
+	for _, record := range records {
+		if record.Model == "" {
+			savedReset[record.AuthID] = record.Quota.Signals["X-Codex-Primary-Reset-At"]
+		}
+	}
+	if got, want := savedReset["codex-c"], strconv.FormatInt(resetC.Unix(), 10); got != want {
+		t.Errorf("saved codex-c reset = %q, want the read %q", got, want)
+	}
+	if got, want := savedReset["codex-a"], strconv.FormatInt(resetA.Unix(), 10); got != want {
+		t.Errorf("saved codex-a reset after a rejected read = %q, want previous %q", got, want)
 	}
 	if got, want := resetOf("codex-a"), strconv.FormatInt(resetA.Unix(), 10); got != want {
 		t.Errorf("codex-a reset after a rejected read = %q, want previous %q", got, want)

@@ -26,6 +26,19 @@ func TestParseCodexUsageHeadersMapsRecordedResponse(t *testing.T) {
 	}
 }
 
+func TestParseCodexUsageHeadersKeepsExhaustedWindowAsGiven(t *testing.T) {
+	body := `{"rate_limit":{"limit_reached":true,"primary_window":{"used_percent":100.4,"reset_after_seconds":3600,"reset_at":1791580412},"secondary_window":null}}`
+	got := ParseCodexUsageHeaders([]byte(body))
+	want := http.Header{}
+	want.Set("X-Codex-Primary-Used-Percent", "100.4")
+	want.Set("X-Codex-Primary-Reset-After-Seconds", "3600")
+	want.Set("X-Codex-Primary-Reset-At", "1791580412")
+	want.Set("X-Codex-Limit-Reached", "true")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseCodexUsageHeaders() = %v, want %v", got, want)
+	}
+}
+
 func TestParseCodexUsageHeadersWithoutWindowReturnsNil(t *testing.T) {
 	body := `{"rate_limit":{"limit_reached":true,"primary_window":null,"secondary_window":null}}`
 	if got := ParseCodexUsageHeaders([]byte(body)); got != nil {

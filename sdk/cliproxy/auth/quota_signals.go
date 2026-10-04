@@ -65,17 +65,12 @@ func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
 	}
 	m.mu.Lock()
 	auth := m.auths[authID]
-	if auth == nil || !auth.Quota.ObserveResponseHeadersForProvider(auth.Provider, headers, time.Now()) {
-		m.mu.Unlock()
-		return false
-	}
-	snapshot := auth.Clone()
+	observed := auth != nil && auth.Quota.ObserveResponseHeadersForProvider(auth.Provider, headers, time.Now())
 	m.mu.Unlock()
-	if m.scheduler != nil {
-		m.scheduler.upsertAuthResult(snapshot, nil, true)
+	if observed {
+		m.persistCooldownStates(context.Background())
 	}
-	m.persistCooldownStates(context.Background())
-	return true
+	return observed
 }
 
 // ClearObservationSignals removes only passive observation data. It leaves
