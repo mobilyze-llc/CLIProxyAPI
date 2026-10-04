@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -17,8 +18,6 @@ const (
 	// quotaUsageReadTimeout bounds one read: the executor HTTP client has no timeout, and
 	// reads run serially, so one hung read would otherwise stall every later read.
 	quotaUsageReadTimeout = 30 * time.Second
-	codexUsageURL         = "https://chatgpt.com/backend-api/wham/usage"
-	claudeUsageURL        = "https://api.anthropic.com/api/oauth/usage"
 )
 
 // startQuotaUsageReads reads the usage endpoint of every Codex and Claude OAuth credential
@@ -46,24 +45,20 @@ func (s *Service) startQuotaUsageReads(ctx context.Context) {
 }
 
 // readQuotaUsage reads one credential's usage endpoint and records the result. A failed or
-// rejected read leaves the previous observation untouched.
+// rejected read leaves the previous observation untouched. The provider's executor sends the
+// read with the client identity of that provider's CLI, so the request carries no headers here.
 func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 	auth, ok := s.coreManager.GetByID(authID)
 	if !ok || auth.AuthKind() != coreauth.AuthKindOAuth || !auth.HasValidAccessToken(time.Now()) {
 		return
 	}
-	headers := make(http.Header)
 	var usageURL string
 	var parse func([]byte) http.Header
 	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
 	case "codex":
-		usageURL, parse = codexUsageURL, helps.ParseCodexUsageHeaders
-		if accountID, _ := auth.Metadata["account_id"].(string); accountID != "" {
-			headers.Set("Chatgpt-Account-Id", accountID)
-		}
+		usageURL, parse = helps.CodexUsageURL, helps.ParseCodexUsageHeaders
 	case "claude":
-		usageURL, parse = claudeUsageURL, helps.ParseClaudeUsageHeaders
-		headers.Set("Anthropic-Beta", "oauth-2025-04-20")
+		usageURL, parse = claudeauth.UsageURL, helps.ParseClaudeUsageHeaders
 	default:
 		return
 	}
@@ -73,7 +68,6 @@ func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 	if errRequest != nil {
 		return
 	}
-	req.Header = headers
 	resp, errDo := s.coreManager.HttpRequest(readCtx, auth, req)
 	if errDo != nil {
 		log.Warnf("quota usage read failed for auth %s: %v", authID, errDo)

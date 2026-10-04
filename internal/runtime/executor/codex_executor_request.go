@@ -84,7 +84,13 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 		ctx = req.Context()
 	}
 	httpReq := req.WithContext(ctx)
-	if err := e.PrepareRequest(httpReq, auth); err != nil {
+	if httpReq.Method == http.MethodGet && httpReq.URL != nil && httpReq.URL.String() == helps.CodexUsageURL {
+		// The usage read carries the identity the credential's inference sends.
+		apiKey, _ := codexCreds(auth)
+		httpReq.Header = make(http.Header)
+		applyCodexIdentityHeaders(httpReq, auth, apiKey, e.cfg, nil)
+		httpReq.Header.Set("Accept", "application/json")
+	} else if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}
 	httpClient := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
@@ -188,12 +194,6 @@ func applyCodexDirectImageHeaders(r *http.Request, auth *cliproxyauth.Auth, toke
 
 func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, token string, stream bool, cfg *config.Config, ginHeaders http.Header) {
 	r.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(token) != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
-	} else {
-		r.Header.Del("Authorization")
-	}
-
 	if ginHeaders != nil && ginHeaders.Get("X-Codex-Beta-Features") != "" {
 		r.Header.Set("X-Codex-Beta-Features", ginHeaders.Get("X-Codex-Beta-Features"))
 	}
@@ -206,15 +206,26 @@ func applyCodexHeadersFromSources(r *http.Request, auth *cliproxyauth.Auth, toke
 	misc.EnsureHeader(r.Header, ginHeaders, "Session-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Openai-Internal-Codex-Responses-Lite", "")
 
-	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
-
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
 	} else {
 		r.Header.Set("Accept", "application/json")
 	}
 	r.Header.Set("Connection", "Keep-Alive")
+	applyCodexIdentityHeaders(r, auth, token, cfg, ginHeaders)
+}
+
+// applyCodexIdentityHeaders sets the credential and client identity every Codex
+// request carries: the bearer token, User-Agent, Originator, ChatGPT account,
+// credential custom headers and cloaking. Inference and the usage read share it.
+func applyCodexIdentityHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, cfg *config.Config, ginHeaders http.Header) {
+	if strings.TrimSpace(token) != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		r.Header.Del("Authorization")
+	}
+	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
+	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 
 	isAPIKey := codexAuthUsesAPIKey(auth)
 	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {

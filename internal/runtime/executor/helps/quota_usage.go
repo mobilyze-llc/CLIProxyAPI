@@ -6,8 +6,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/tidwall/gjson"
 )
+
+// CodexUsageURL is the ChatGPT backend usage endpoint the Codex CLI reads.
+const CodexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
+
+// ClaudeUsageUserAgent returns the Claude Code User-Agent a usage read carries:
+// the configured CLI baseline. Inference sends it for every request without a
+// confirmed Claude Code client, and a stabilized device profile is accepted only
+// at the baseline version, so a credential's resolved profile has it too.
+func ClaudeUsageUserAgent(cfg *config.Config) string {
+	return defaultClaudeDeviceProfile(cfg).UserAgent
+}
 
 // ParseCodexUsageHeaders converts a /backend-api/wham/usage response into the
 // X-Codex primary and secondary window headers that Codex responses carry.
