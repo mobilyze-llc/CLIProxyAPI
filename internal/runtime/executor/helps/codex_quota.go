@@ -2,6 +2,7 @@ package helps
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -110,6 +111,41 @@ func ParseCodexQuotaEventHeaders(payload []byte) http.Header {
 	if planType := firstCodexQuotaResultString(root, "plan_type", "planType"); validCodexQuotaEventText(planType) {
 		headers.Set("X-Codex-Plan-Type", planType)
 	}
+	return headers
+}
+
+// ParseCodexUsageHeaders converts a /backend-api/wham/usage response into the
+// X-Codex primary and secondary window headers that Codex responses carry. It
+// returns nil when the response holds no usable window.
+func ParseCodexUsageHeaders(body []byte) http.Header {
+	rateLimit := gjson.GetBytes(body, "rate_limit")
+	headers := make(http.Header)
+	for _, name := range []string{"Primary", "Secondary"} {
+		window := rateLimit.Get(strings.ToLower(name) + "_window")
+		used := window.Get("used_percent")
+		seconds := window.Get("limit_window_seconds").Int()
+		resetAfter := window.Get("reset_after_seconds")
+		resetAt := window.Get("reset_at")
+		hasResetAfter := resetAfter.Type == gjson.Number && resetAfter.Int() >= 0
+		hasResetAt := resetAt.Type == gjson.Number && resetAt.Int() > 0
+		if used.Type != gjson.Number || used.Float() < 0 || used.Float() > 100 || seconds < 60 ||
+			(!hasResetAfter && !hasResetAt) {
+			continue
+		}
+		prefix := "X-Codex-" + name + "-"
+		headers.Set(prefix+"Used-Percent", used.Raw)
+		headers.Set(prefix+"Window-Minutes", strconv.FormatInt(seconds/60, 10))
+		if hasResetAfter {
+			headers.Set(prefix+"Reset-After-Seconds", resetAfter.Raw)
+		}
+		if hasResetAt {
+			headers.Set(prefix+"Reset-At", resetAt.Raw)
+		}
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	setCodexQuotaScalarHeaderFromResult(headers, "X-Codex-Limit-Reached", rateLimit, "limit_reached")
 	return headers
 }
 

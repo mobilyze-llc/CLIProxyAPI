@@ -10,6 +10,7 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -305,4 +306,28 @@ func randomClaudeFuzzDuration(minSec, maxSec int) time.Duration {
 		return time.Duration(minSec) * time.Second
 	}
 	return time.Duration(minSec+int(nBig.Int64())) * time.Second
+}
+
+// ParseClaudeUsageHeaders converts an /api/oauth/usage response into the
+// Anthropic unified 5h and 7d headers that Claude responses carry. Utilization
+// arrives as a percent and leaves as a fraction; resets_at arrives as RFC 3339
+// and leaves as Unix seconds. It returns nil when the response holds no usable
+// window.
+func ParseClaudeUsageHeaders(body []byte) http.Header {
+	headers := make(http.Header)
+	for name, path := range map[string]string{"5h": "five_hour", "7d": "seven_day"} {
+		window := gjson.GetBytes(body, path)
+		utilization := window.Get("utilization")
+		resetAt, errParse := time.Parse(time.RFC3339, window.Get("resets_at").String())
+		if utilization.Type != gjson.Number || errParse != nil {
+			continue
+		}
+		prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
+		headers.Set(prefix+"Utilization", strconv.FormatFloat(utilization.Float()/100, 'f', -1, 64))
+		headers.Set(prefix+"Reset", strconv.FormatInt(resetAt.Unix(), 10))
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
 }

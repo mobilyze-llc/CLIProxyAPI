@@ -683,3 +683,50 @@ func TestObserveResponseHeadersKeepsPrimaryWhenTruncatingAdditional(t *testing.T
 		t.Fatalf("snapshot size = %d, want %d", len(quota.Signals), maxQuotaSignalHeaders)
 	}
 }
+
+func TestObserveQuotaHeadersKeepsCooldownAndAuthRecord(t *testing.T) {
+	store := &countingStore{}
+	cooldownStore := &recordingCooldownStateStore{}
+	manager := NewManager(store, nil, nil)
+	manager.SetCooldownStateStore(cooldownStore)
+	recoverAt := time.Now().Add(time.Hour).Truncate(time.Second)
+	if _, errRegister := manager.Register(WithSkipPersist(context.Background()), &Auth{
+		ID: "usage-read-auth", Provider: "codex", Status: StatusError, Unavailable: true, NextRetryAfter: recoverAt,
+		Quota: QuotaState{
+			Exceeded: true, Reason: "credential_quota", NextRecoverAt: recoverAt, BackoffLevel: 2,
+			ObservedAt: time.Now().Add(-time.Hour), Signals: map[string]string{"X-Codex-Primary-Used-Percent": "100"},
+		},
+	}); errRegister != nil {
+		t.Fatalf("Register() error = %v", errRegister)
+	}
+	before, _ := manager.GetByID("usage-read-auth")
+	if !before.Quota.Exceeded || !before.Unavailable {
+		t.Fatalf("registered auth lost its cooldown: %+v", before)
+	}
+
+	if manager.ObserveQuotaHeaders("usage-read-auth", nil) {
+		t.Fatal("ObserveQuotaHeaders(nil) reported an observation")
+	}
+	if unchanged, _ := manager.GetByID("usage-read-auth"); !reflect.DeepEqual(unchanged.Quota, before.Quota) {
+		t.Fatalf("empty read changed quota: %+v, want %+v", unchanged.Quota, before.Quota)
+	}
+
+	if !manager.ObserveQuotaHeaders("usage-read-auth", http.Header{"X-Codex-Primary-Used-Percent": []string{"9"}}) {
+		t.Fatal("ObserveQuotaHeaders() did not record the observation")
+	}
+	after, _ := manager.GetByID("usage-read-auth")
+	if after.Quota.Signals["X-Codex-Primary-Used-Percent"] != "9" || !after.Quota.ObservedAt.After(before.Quota.ObservedAt) {
+		t.Fatalf("observation not recorded: %+v", after.Quota)
+	}
+	if !reflect.DeepEqual(cooldownFieldsOf(after.Quota), cooldownFieldsOf(before.Quota)) || after.Unavailable != before.Unavailable ||
+		after.Status != before.Status || !after.NextRetryAfter.Equal(before.NextRetryAfter) ||
+		after.Generation != before.Generation {
+		t.Fatalf("read changed cooldown or availability: before %+v, after %+v", before, after)
+	}
+	if got := store.saveCount.Load(); got != 0 {
+		t.Fatalf("auth store saves = %d, want 0", got)
+	}
+	if got := cooldownStore.saveCount.Load(); got != 1 {
+		t.Fatalf("cooldown state saves = %d, want 1", got)
+	}
+}

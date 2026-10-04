@@ -91,6 +91,9 @@ func (s *Service) Run(ctx context.Context) error {
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(ctx, interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
+		quotaCtx, quotaCancel := context.WithCancel(ctx)
+		s.quotaReadsCancel = quotaCancel
+		s.startQuotaUsageReads(quotaCtx)
 	}
 
 	if !homeEnabled {
@@ -285,6 +288,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 		if s.watcherCancel != nil {
 			s.watcherCancel()
+		}
+		if s.quotaReadsCancel != nil {
+			s.quotaReadsCancel()
 		}
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
