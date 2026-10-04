@@ -1,13 +1,29 @@
 package helps
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
+
+// ClaudeUsageUserAgent returns the Claude Code User-Agent a usage read carries: the
+// configured CLI baseline. Inference also sends it for clients it has not confirmed as
+// Claude Code, with stabilize-device-profile off (the default).
+func ClaudeUsageUserAgent(cfg *config.Config) string {
+	return defaultClaudeDeviceProfile(cfg).UserAgent
+}
+
+// EffectiveProxyURL returns the proxy NewUtlsHTTPClient and NewProxyAwareHTTPClient use:
+// the request-scoped override, then the credential proxy, then the global proxy.
+func EffectiveProxyURL(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) string {
+	return effectiveProxyURL(ctx, cfg, auth)
+}
 
 // ParseCodexUsageHeaders converts a /backend-api/wham/usage response into the
 // X-Codex primary and secondary window headers that Codex responses carry.

@@ -2,12 +2,8 @@ package cliproxy
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -17,8 +13,6 @@ const (
 	// quotaUsageReadTimeout bounds one read: the executor HTTP client has no timeout, and
 	// reads run serially, so one hung read would otherwise stall every later read.
 	quotaUsageReadTimeout = 30 * time.Second
-	codexUsageURL         = "https://chatgpt.com/backend-api/wham/usage"
-	claudeUsageURL        = "https://api.anthropic.com/api/oauth/usage"
 )
 
 // startQuotaUsageReads reads the usage endpoint of every Codex and Claude OAuth credential
@@ -45,55 +39,33 @@ func (s *Service) startQuotaUsageReads(ctx context.Context) {
 	}()
 }
 
-// readQuotaUsage reads one credential's usage endpoint and records the result. A failed or
-// rejected read leaves the previous observation untouched.
+// readQuotaUsage reads one credential's usage endpoint and records the result. It decides
+// eligibility: enabled Codex and Claude OAuth credentials with a valid access token whose
+// executor implements coreauth.QuotaUsageReader. The provider check is needed because Go
+// embedding passes the capability on: KimiExecutor embeds ClaudeExecutor, and a Kimi token
+// must never reach Anthropic. A failed or rejected read leaves the previous observation untouched.
 func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 	auth, ok := s.coreManager.GetByID(authID)
-	if !ok || auth.AuthKind() != coreauth.AuthKindOAuth || !auth.HasValidAccessToken(time.Now()) {
+	if !ok || auth.Disabled || auth.AuthKind() != coreauth.AuthKindOAuth || !auth.HasValidAccessToken(time.Now()) {
 		return
 	}
-	headers := make(http.Header)
-	var usageURL string
-	var parse func([]byte) http.Header
-	switch strings.ToLower(strings.TrimSpace(auth.Provider)) {
-	case "codex":
-		usageURL, parse = codexUsageURL, helps.ParseCodexUsageHeaders
-		if accountID, _ := auth.Metadata["account_id"].(string); accountID != "" {
-			headers.Set("Chatgpt-Account-Id", accountID)
-		}
-	case "claude":
-		usageURL, parse = claudeUsageURL, helps.ParseClaudeUsageHeaders
-		headers.Set("Anthropic-Beta", "oauth-2025-04-20")
-	default:
+	if auth.Provider != "codex" && auth.Provider != "claude" {
+		return
+	}
+	exec, ok := s.coreManager.Executor(auth.Provider)
+	if !ok {
+		return
+	}
+	reader, ok := exec.(coreauth.QuotaUsageReader)
+	if !ok {
 		return
 	}
 	readCtx, cancel := context.WithTimeout(ctx, quotaUsageReadTimeout)
 	defer cancel()
-	req, errRequest := http.NewRequestWithContext(readCtx, http.MethodGet, usageURL, nil)
-	if errRequest != nil {
-		return
-	}
-	req.Header = headers
-	resp, errDo := s.coreManager.HttpRequest(readCtx, auth, req)
-	if errDo != nil {
-		log.Warnf("quota usage read failed for auth %s: %v", authID, errDo)
-		return
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("quota usage read: close response body: %v", errClose)
-		}
-	}()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		log.Warnf("quota usage read for auth %s returned status %d", authID, resp.StatusCode)
-		return
-	}
-	body, errRead := io.ReadAll(resp.Body)
+	observed, errRead := reader.ReadQuotaUsage(readCtx, auth)
 	if errRead != nil {
 		log.Warnf("quota usage read failed for auth %s: %v", authID, errRead)
 		return
 	}
-	if observed := parse(body); observed != nil {
-		s.coreManager.ObserveQuotaHeaders(authID, observed)
-	}
+	s.coreManager.ObserveQuotaHeaders(authID, observed)
 }
