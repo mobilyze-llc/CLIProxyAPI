@@ -1,10 +1,14 @@
-extends: mergify-config
+merge_queue:
+  mode: serial
+  max_parallel_checks: 1
 queue_rules:
   - name: default
     checks_timeout: null
     queue_conditions: []
     merge_conditions: []
 merge_protections_settings:
+  reporting_method: check-runs
+  post_comment: false
   auto_merge_conditions:
     - base = main
 merge_protections:
@@ -16,7 +20,6 @@ merge_protections:
       - -label = hold
       - check-success = go
       - check-success = e2e-hermetic
-      - check-success = CodeQL
       - check-success = Analyze (actions)
       - check-success = Analyze (go)
       - check-success = Analyze (javascript-typescript)
