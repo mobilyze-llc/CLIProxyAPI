@@ -28,8 +28,8 @@ merge_protections:
       - base = main
       - or:
           - files ~= (?i)(auth|secret|credential|migration|quota)
-          - files ~= ^sdk/cliproxy/
-          - files ~= ^internal/(api|config|home|runtime/executor)/
+          - files ~= ^sdk/(access|api|cliproxy)/
+          - files ~= ^internal/(access|api|config|home|runtime/executor)/
           - files ~= ^(\.github/|\.mergify(\.ya?ml\Z|/))
     success_conditions:
       - check-success = @unfret/Unfret
