@@ -29,21 +29,17 @@ func (m *Manager) quotaReserveReached(auth *Auth, now time.Time) bool {
 			return true
 		}
 
-		observed := false
-		for _, window := range observedQuotaWindows(auth) {
-			if !window.observed {
+		windows := auth.Quota.reserveWindows(auth.Provider)
+		if len(windows) == 0 || strings.EqualFold(auth.Provider, "claude") && len(windows) < 2 {
+			return true
+		}
+		for _, window := range windows {
+			if !window.ResetAt.IsZero() && !window.ResetAt.After(now) {
 				continue
 			}
-			observed = true
-			if !window.resetAt.IsZero() && !window.resetAt.After(now) {
-				continue
-			}
-			if !window.usageKnown || window.exhausted || window.usedPercent >= 100-reserve.Percent {
+			if !window.UsageKnown || window.Exhausted || window.UsedPercent >= 100-reserve.Percent {
 				return true
 			}
-		}
-		if !observed {
-			return true
 		}
 	}
 	return false

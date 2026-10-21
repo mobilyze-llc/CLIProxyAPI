@@ -33,8 +33,7 @@ func ProviderSupportsQuotaObservation(provider string) bool {
 // indefinitely. Responses that carry no quota signal at all (transport
 // failures, 5xx, unrelated endpoints) leave the previous snapshot untouched.
 //
-// This function only ever touches ObservedAt and Signals. Cooldown and
-// scheduling fields are never read or written here.
+// Cooldown and scheduling fields are never read or written here.
 func (q *QuotaState) ObserveResponseHeadersForProvider(provider string, headers http.Header, observedAt time.Time) bool {
 	if q == nil {
 		return false
@@ -49,8 +48,10 @@ func (q *QuotaState) ObserveResponseHeadersForProvider(provider string, headers 
 	if observedAt.IsZero() {
 		observedAt = time.Now()
 	}
+	q.observeReserveWindows(provider, observedAt)
 	q.Signals = next
 	q.ObservedAt = observedAt
+	q.observeReserveWindows(provider, observedAt)
 	return true
 }
 
@@ -76,10 +77,11 @@ func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
 // ClearObservationSignals removes only passive observation data. It leaves
 // cooldown and scheduler state untouched.
 func (q *QuotaState) ClearObservationSignals() bool {
-	if q == nil || (len(q.Signals) == 0 && q.ObservedAt.IsZero()) {
+	if q == nil || (len(q.Signals) == 0 && len(q.ReserveWindows) == 0 && q.ObservedAt.IsZero()) {
 		return false
 	}
 	q.Signals = nil
+	q.ReserveWindows = nil
 	q.ObservedAt = time.Time{}
 	return true
 }
@@ -238,6 +240,7 @@ func isQuotaSignalHeaderForProvider(provider, name string) bool {
 // unioning signals captured at different times, so merging an older snapshot
 // can never resurrect a stale watermark.
 func mergeQuotaObservation(target, source QuotaState) QuotaState {
+	target.ReserveWindows = mergeReserveWindows(target.ReserveWindows, source.ReserveWindows)
 	if source.ObservedAt.IsZero() || source.ObservedAt.Before(target.ObservedAt) {
 		return target
 	}

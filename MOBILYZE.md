@@ -29,11 +29,14 @@ so existing sticky sessions move to another eligible account. If none are availa
 fails; the reserve is never relaxed. Set `percent: 0` or remove the rule to disable it. Account
 matching ignores email case and whitespace. Reserves apply to all models using the matching account.
 
-Protected accounts wait for usable window usage, rather than account metadata alone. Missing or
-malformed usage blocks an active window; high usage without a reset time stays blocked until a
-newer reading clears it. Usage is observed from upstream
-responses and the existing five-minute background usage reader, including usage outside the
-proxy. Reporting delays and requests already in flight can overshoot the threshold. An expired
+Protected accounts wait for usable window usage, rather than account metadata alone. Claude
+requires both windows; Codex plans that report only a weekly window remain supported. Reserve
+enforcement retains each observed window across partial readings, credential refreshes and
+restarts. A missing window or an unanchored zero cannot clear a known high reading. A valid
+reading with a reset time can clear it, and a known reset still releases the account when
+later readings omit that window. High usage without a reset time stays blocked until a usable
+new reading clears it. Usage is observed from upstream responses and the existing five-minute
+background usage reader, including usage outside the proxy. Reporting delays and requests already in flight can overshoot the threshold. An expired
 window no longer blocks the account; a newer reading below the threshold also restores eligibility.
 Reserves do not cancel requests already in progress or prevent direct use outside the proxy.
 

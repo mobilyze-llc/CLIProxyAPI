@@ -672,6 +672,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 			if records[i].Model == model {
 				records[i].Quota.ObservedAt = observation.ObservedAt
 				records[i].Quota.Signals = observation.Signals
+				records[i].Quota.ReserveWindows = observation.ReserveWindows
 				return
 			}
 		}
@@ -681,7 +682,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 			AuthFile:  cooldownAuthFile(auth),
 			Model:     model,
 			Status:    cooldownStateStatusObserved,
-			Quota:     QuotaState{ObservedAt: observation.ObservedAt, Signals: observation.Signals},
+			Quota:     QuotaState{ObservedAt: observation.ObservedAt, Signals: observation.Signals, ReserveWindows: observation.ReserveWindows},
 			UpdatedAt: updatedAt,
 		})
 	}
@@ -708,7 +709,7 @@ func (m *Manager) restoreQuotaObservationLocked(record CooldownStateRecord) bool
 	if auth == nil || auth.Disabled || auth.Status == StatusDisabled || !ProviderSupportsQuotaObservation(auth.Provider) {
 		return false
 	}
-	observation := QuotaState{ObservedAt: quota.ObservedAt, Signals: quota.Clone().Signals}
+	observation := quota.Clone()
 	model := strings.TrimSpace(record.Model)
 	if model == "" {
 		before := auth.Quota.ObservedAt
