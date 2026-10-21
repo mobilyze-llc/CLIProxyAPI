@@ -110,7 +110,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	if errValidate := cfg.ValidateCredentialWeights(); errValidate != nil {
 		return nil, errValidate
 	}
-	if errValidate := cfg.Routing.ValidateQuotaReserves(); errValidate != nil {
+	if errValidate := cfg.ValidateQuotaReserves(); errValidate != nil {
 		return nil, errValidate
 	}
 

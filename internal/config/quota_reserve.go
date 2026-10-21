@@ -21,3 +21,17 @@ func (cfg RoutingConfig) ValidateQuotaReserves() error {
 	}
 	return nil
 }
+
+func (cfg *Config) ValidateQuotaReserves() error {
+	if err := cfg.Routing.ValidateQuotaReserves(); err != nil {
+		return err
+	}
+	if cfg.Home.Enabled {
+		for _, reserve := range cfg.Routing.QuotaReserves {
+			if reserve.Percent > 0 {
+				return fmt.Errorf("routing.quota-reserves requires local credential selection; home.enabled must be false")
+			}
+		}
+	}
+	return nil
+}

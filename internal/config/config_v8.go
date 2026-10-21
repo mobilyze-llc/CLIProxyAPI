@@ -910,5 +910,5 @@ func ValidateV8Config(data []byte) error {
 	if err := decoder.Decode(&cfg); err != nil {
 		return err
 	}
-	return cfg.Routing.ValidateQuotaReserves()
+	return (*Config)(&cfg).ValidateQuotaReserves()
 }

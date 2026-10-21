@@ -37,3 +37,7 @@ Reserves do not cancel requests already in progress or prevent direct use outsid
 
 With reserves configured, credential selection uses request-time filtering rather than the
 cached scheduler. Other accounts retain their existing availability and routing rules.
+
+Reserve rules require local credential selection. An active reserve combined with `home.enabled`
+is rejected at startup, SDK construction and reload; Home dispatch also fails closed if an
+invalid combination is installed directly through the low-level manager API.

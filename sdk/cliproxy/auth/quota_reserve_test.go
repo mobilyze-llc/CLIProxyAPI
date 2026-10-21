@@ -211,3 +211,15 @@ func TestQuotaReserveConcurrentUsageAndReload(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestQuotaReserveHomeDispatchFailsClosed(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	cfg := reserveTestConfig("codex")
+	cfg.Home.Enabled = true
+	manager.SetConfig(cfg)
+	_, err := manager.pickHomeDispatchSelection(context.Background(), "model", cliproxyexecutor.Options{})
+	authErr, ok := err.(*Error)
+	if !ok || authErr.Code != "quota_reserve_home_unsupported" {
+		t.Fatalf("Home reserve bypass: %v", err)
+	}
+}
