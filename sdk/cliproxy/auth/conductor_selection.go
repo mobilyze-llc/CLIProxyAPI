@@ -923,6 +923,20 @@ func (m *Manager) pickViaBuiltinScheduler(ctx context.Context, strategy schedule
 	if m == nil || m.scheduler == nil {
 		return nil, false, nil
 	}
+	if len(m.quotaReserves()) > 0 {
+		excluded := make(map[string]struct{}, len(tried))
+		for id := range tried {
+			excluded[id] = struct{}{}
+		}
+		m.mu.RLock()
+		for id, candidate := range m.auths {
+			if m.quotaReserveReached(candidate, time.Now()) {
+				excluded[id] = struct{}{}
+			}
+		}
+		m.mu.RUnlock()
+		tried = excluded
+	}
 	providerKey := strings.ToLower(strings.TrimSpace(provider))
 	var selected *Auth
 	var errPick error
@@ -1638,6 +1652,9 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
+	if len(m.quotaReserves()) > 0 {
+		return false
+	}
 	return isBuiltInSelector(m.Selector())
 }
 
@@ -1759,6 +1776,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 			continue
 		}
 		if !eligibility.allows(candidate) {
+			continue
+		}
+		if m.quotaReserveReached(candidate, time.Now()) {
 			continue
 		}
 		if _, used := tried[candidate.ID]; used {
@@ -2083,6 +2103,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 			continue
 		}
 		if !eligibility.allows(candidate) {
+			continue
+		}
+		if m.quotaReserveReached(candidate, time.Now()) {
 			continue
 		}
 		providerKey := executorKeyFromAuth(candidate)

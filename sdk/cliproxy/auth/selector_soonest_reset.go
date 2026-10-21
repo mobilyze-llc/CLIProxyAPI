@@ -106,7 +106,7 @@ func observedQuotaWindows(auth *Auth) []quotaWindow {
 			}
 			utilization, _ := strconv.ParseFloat(signal(prefix+"Utilization"), 64)
 			rejected := strings.EqualFold(signal(prefix+"Status"), "rejected")
-			windows = append(windows, quotaWindow{weekly: name == "7d", exhausted: utilization >= 1 || rejected, resetAt: resetAt})
+			windows = append(windows, quotaWindow{weekly: name == "7d", exhausted: utilization >= 1 || rejected, usedPercent: utilization * 100, resetAt: resetAt})
 		}
 	case "codex":
 		// Codex Pro reports its weekly window as primary, so windows are keyed by length.

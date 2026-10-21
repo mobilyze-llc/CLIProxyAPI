@@ -7,3 +7,33 @@ A private copy of [router-for-me/CLIProxyAPI](https://github.com/router-for-me/C
 - Never push upstream tags to this repo. Upstream's release and Docker workflows were removed, but a pushed upstream tag still carries them in its own tree.
 - Our releases use tags of the form `v8.0.13-mob.N`.
 - Selector source: zsprackett/CLIProxyAPI commits `faa4ccff`, `01ad0021` and `67f5749d` (MIT), with authorship kept. `4d7b2e84` (model-scoped weekly windows) was left out.
+
+## Subscription reserves
+
+Configure a percentage to keep available for direct use of a Claude or Codex OAuth account:
+
+```yaml
+routing:
+  quota-reserves:
+    - provider: claude
+      email: personal@example.com
+      percent: 20
+    - provider: codex
+      email: personal@example.com
+      percent: 20
+```
+
+A 20% reserve excludes the account once either its active five-hour or weekly window is at
+least 80% used. This applies before session affinity, pinned credentials and selector fallback,
+so existing sticky sessions move to another eligible account. If none are available the request
+fails; the reserve is never relaxed. Set `percent: 0` or remove the rule to disable it. Account
+matching ignores email case and whitespace. Reserves apply to all models using the matching account.
+
+Protected accounts wait for an initial quota observation. Usage is observed from upstream
+responses and the existing five-minute background usage reader, including usage outside the
+proxy. Reporting delays and requests already in flight can overshoot the threshold. An expired
+window no longer blocks the account; a newer reading below the threshold also restores eligibility.
+Reserves do not cancel requests already in progress or prevent direct use outside the proxy.
+
+With reserves configured, credential selection uses request-time filtering rather than the
+cached scheduler. Other accounts retain their existing availability and routing rules.
