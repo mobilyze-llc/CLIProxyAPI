@@ -223,3 +223,28 @@ func TestQuotaReserveHomeDispatchFailsClosed(t *testing.T) {
 		t.Fatalf("Home reserve bypass: %v", err)
 	}
 }
+
+func TestQuotaReserveIncompleteUsageFailsClosed(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name, provider string
+		signals        map[string]string
+	}{
+		{"codex-plan-only", "codex", map[string]string{"X-Codex-Plan-Type": "pro"}},
+		{"claude-missing-reset", "claude", map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "0.95"}},
+		{"claude-partial-window", "claude", map[string]string{"Anthropic-Ratelimit-Unified-5h-Utilization": "0.95", "Anthropic-Ratelimit-Unified-7d-Utilization": "0.1", "Anthropic-Ratelimit-Unified-7d-Reset": unixString(now.Add(time.Hour))}},
+		{"codex-missing-reset", "codex", map[string]string{"X-Codex-Primary-Used-Percent": "95", "X-Codex-Secondary-Used-Percent": "10", "X-Codex-Secondary-Reset-At": unixString(now.Add(time.Hour))}},
+		{"claude-malformed-usage", "claude", map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "invalid", "Anthropic-Ratelimit-Unified-7d-Reset": unixString(now.Add(time.Hour))}},
+		{"codex-malformed-usage", "codex", map[string]string{"X-Codex-Primary-Used-Percent": "NaN", "X-Codex-Primary-Reset-At": unixString(now.Add(time.Hour))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := NewManager(nil, nil, nil)
+			manager.SetConfig(reserveTestConfig(tc.provider))
+			auth := reserveTestAuth(tc.provider, "partial", "personal@example.com", 10, 10, now.Add(time.Hour))
+			auth.Quota = QuotaState{ObservedAt: now, Signals: tc.signals}
+			if !manager.quotaReserveReached(auth, now) {
+				t.Fatal("partial quota observation bypassed reserve")
+			}
+		})
+	}
+}

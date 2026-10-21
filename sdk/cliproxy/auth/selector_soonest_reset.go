@@ -65,6 +65,9 @@ func soonestResetRank(auth *Auth, now time.Time) (gated bool, weeklyReset time.T
 		weeklyReset = time.Time{}
 	}
 	for _, window := range observedQuotaWindows(auth) {
+		if window.resetAt.IsZero() {
+			continue
+		}
 		if window.exhausted && window.resetAt.After(now) {
 			gated = true
 		}
@@ -83,6 +86,8 @@ func soonestResetRank(auth *Auth, now time.Time) (gated bool, weeklyReset time.T
 
 // quotaWindow is one observed quota window of a credential.
 type quotaWindow struct {
+	observed    bool
+	usageKnown  bool
 	weekly      bool
 	exhausted   bool
 	usedPercent float64
@@ -101,12 +106,16 @@ func observedQuotaWindows(auth *Auth) []quotaWindow {
 		for _, name := range []string{"5h", "7d"} {
 			prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
 			resetAt := parseQuotaResetAt(signal(prefix+"Reset"), "", time.Time{})
-			if resetAt.IsZero() {
-				continue
-			}
-			utilization, _ := strconv.ParseFloat(signal(prefix+"Utilization"), 64)
+
+			rawUsage := signal(prefix + "Utilization")
+			utilization, errUsage := strconv.ParseFloat(rawUsage, 64)
 			rejected := strings.EqualFold(signal(prefix+"Status"), "rejected")
-			windows = append(windows, quotaWindow{weekly: name == "7d", exhausted: utilization >= 1 || rejected, usedPercent: utilization * 100, resetAt: resetAt})
+			windows = append(windows, quotaWindow{
+				observed:   rawUsage != "" || signal(prefix+"Reset") != "" || signal(prefix+"Status") != "",
+				usageKnown: errUsage == nil && utilization >= 0 && utilization <= 1,
+				weekly:     name == "7d", exhausted: utilization >= 1 || rejected,
+				usedPercent: utilization * 100, resetAt: resetAt,
+			})
 		}
 	case "codex":
 		// Codex Pro reports its weekly window as primary, so windows are keyed by length.
@@ -114,14 +123,17 @@ func observedQuotaWindows(auth *Auth) []quotaWindow {
 		for _, name := range []string{"Primary", "Secondary"} {
 			prefix := "X-Codex-" + name + "-"
 			resetAt := parseQuotaResetAt(signal(prefix+"Reset-At"), signal(prefix+"Reset-After-Seconds"), auth.Quota.ObservedAt)
-			if resetAt.IsZero() {
-				continue
-			}
 			// A missing window length keeps the window; it only means the length is unknown.
 			minutes, _ := strconv.ParseInt(signal(prefix+"Window-Minutes"), 10, 64)
-			used, _ := strconv.ParseFloat(signal(prefix+"Used-Percent"), 64)
+
+			rawUsage := signal(prefix + "Used-Percent")
+			used, errUsage := strconv.ParseFloat(rawUsage, 64)
 			mostUsed = max(mostUsed, used)
-			windows = append(windows, quotaWindow{weekly: minutes >= weeklyWindowMinutes, usedPercent: used, resetAt: resetAt})
+			windows = append(windows, quotaWindow{
+				observed:   rawUsage != "" || signal(prefix+"Reset-At") != "" || signal(prefix+"Reset-After-Seconds") != "",
+				usageKnown: errUsage == nil && used >= 0 && used <= 100,
+				weekly:     minutes >= weeklyWindowMinutes, usedPercent: used, resetAt: resetAt,
+			})
 		}
 		// The credential-wide limit-reached flag names no window; it is the most used one.
 		limitReached, _ := strconv.ParseBool(signal("X-Codex-Limit-Reached"))

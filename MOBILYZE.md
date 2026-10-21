@@ -29,7 +29,9 @@ so existing sticky sessions move to another eligible account. If none are availa
 fails; the reserve is never relaxed. Set `percent: 0` or remove the rule to disable it. Account
 matching ignores email case and whitespace. Reserves apply to all models using the matching account.
 
-Protected accounts wait for an initial quota observation. Usage is observed from upstream
+Protected accounts wait for usable window usage, rather than account metadata alone. Missing or
+malformed usage blocks an active window; high usage without a reset time stays blocked until a
+newer reading clears it. Usage is observed from upstream
 responses and the existing five-minute background usage reader, including usage outside the
 proxy. Reporting delays and requests already in flight can overshoot the threshold. An expired
 window no longer blocks the account; a newer reading below the threshold also restores eligibility.
