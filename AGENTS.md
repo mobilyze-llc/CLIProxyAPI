@@ -5,6 +5,8 @@ Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with 
 ## Repository
 - GitHub: https://github.com/router-for-me/CLIProxyAPI
 
+Merge policy: land on green
+
 ## Commands
 ```bash
 gofmt -w . # Format (required after Go changes)
