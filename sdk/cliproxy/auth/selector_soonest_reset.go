@@ -128,7 +128,9 @@ func observedQuotaWindows(auth *Auth) []quotaWindow {
 
 			rawUsage := signal(prefix + "Used-Percent")
 			used, errUsage := strconv.ParseFloat(rawUsage, 64)
-			mostUsed = max(mostUsed, used)
+			if !resetAt.IsZero() {
+				mostUsed = max(mostUsed, used)
+			}
 			windows = append(windows, quotaWindow{
 				observed:   rawUsage != "" || signal(prefix+"Reset-At") != "" || signal(prefix+"Reset-After-Seconds") != "",
 				usageKnown: errUsage == nil && used >= 0 && used <= 100,

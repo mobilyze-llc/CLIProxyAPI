@@ -248,3 +248,15 @@ func TestQuotaReserveIncompleteUsageFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestSoonestResetSelectorMissingResetPreservesLimitAttribution(t *testing.T) {
+	now := time.Now()
+	auth := codexAuthWithSignals("missing-reset-attribution",
+		map[string]string{"X-Codex-Primary-Used-Percent": "90", "X-Codex-Primary-Window-Minutes": "10080", "X-Codex-Limit-Reached": "true"},
+		codexWindowSignals("Secondary", 300, 20, now.Add(time.Hour)),
+	)
+	gated, _ := soonestResetRank(auth, now)
+	if !gated {
+		t.Fatal("reset-less window changed existing limit-reached attribution")
+	}
+}
