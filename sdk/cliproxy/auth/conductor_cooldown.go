@@ -664,7 +664,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 		return records
 	}
 	attach := func(model string, quota QuotaState, updatedAt time.Time) {
-		if quota.ObservedAt.IsZero() || len(quota.Signals) == 0 {
+		if (quota.ObservedAt.IsZero() || len(quota.Signals) == 0) && len(quota.ReserveWindows) == 0 {
 			return
 		}
 		observation := quota.Clone()
@@ -702,7 +702,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 // state. The newest observation wins, so a live response after startup is kept.
 func (m *Manager) restoreQuotaObservationLocked(record CooldownStateRecord) bool {
 	quota := record.Quota
-	if quota.ObservedAt.IsZero() || len(quota.Signals) == 0 {
+	if (quota.ObservedAt.IsZero() || len(quota.Signals) == 0) && len(quota.ReserveWindows) == 0 {
 		return false
 	}
 	auth := m.auths[strings.TrimSpace(record.AuthID)]

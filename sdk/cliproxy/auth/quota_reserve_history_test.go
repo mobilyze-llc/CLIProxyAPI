@@ -165,5 +165,14 @@ func TestQuotaReserveHistoryCodexInactiveSecondary(t *testing.T) {
 		if manager.quotaReserveReached(auth, now.Add(time.Second)) {
 			t.Fatalf("inactive secondary with relative reset %q excluded weekly-only plan", relativeReset)
 		}
+		auth.Quota.ObserveResponseHeadersForProvider("codex", http.Header{"X-Codex-Limit-Reached": {"true"}}, now.Add(time.Minute))
+		if !manager.quotaReserveReached(auth, now.Add(time.Minute)) {
+			t.Fatal("credential-wide rejection did not exclude the account")
+		}
+		healthy := reserveHeaders(codexWindowSignals("Primary", weeklyWindowMinutes, 10, now.Add(time.Hour)))
+		auth.Quota.ObserveResponseHeadersForProvider("codex", healthy, now.Add(2*time.Minute))
+		if manager.quotaReserveReached(auth, now.Add(2*time.Minute)) {
+			t.Fatalf("inactive secondary with relative reset %q survived as a phantom block", relativeReset)
+		}
 	}
 }

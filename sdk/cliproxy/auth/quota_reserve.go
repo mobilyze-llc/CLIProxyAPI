@@ -25,10 +25,6 @@ func (m *Manager) quotaReserveReached(auth *Auth, now time.Time) bool {
 			!strings.EqualFold(strings.TrimSpace(reserve.Email), email) {
 			continue
 		}
-		if auth.Quota.ObservedAt.IsZero() {
-			return true
-		}
-
 		windows := auth.Quota.reserveWindows(auth.Provider)
 		if len(windows) == 0 || strings.EqualFold(auth.Provider, "claude") && len(windows) < 2 {
 			return true
@@ -37,7 +33,7 @@ func (m *Manager) quotaReserveReached(auth *Auth, now time.Time) bool {
 			if !window.ResetAt.IsZero() && !window.ResetAt.After(now) {
 				continue
 			}
-			if !window.UsageKnown || window.Exhausted || window.UsedPercent >= 100-reserve.Percent {
+			if !window.UsageTrusted || window.UsedPercent >= 100-reserve.Percent {
 				return true
 			}
 		}

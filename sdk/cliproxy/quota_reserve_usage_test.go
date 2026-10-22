@@ -3,6 +3,7 @@ package cliproxy
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,10 +54,29 @@ func TestQuotaReservePartialClaudeUsageDoesNotRestoreEligibility(t *testing.T) {
 					if !manager.ObserveQuotaHeaders("protected", helps.ParseClaudeUsageHeaders(body)) {
 						t.Fatal("usage response was not observed")
 					}
+					if window == partial.window {
+						observed, _ := manager.GetByID("protected")
+						prefix := "Anthropic-Ratelimit-Unified-5h-"
+						if limiting == "seven_day" {
+							prefix = "Anthropic-Ratelimit-Unified-7d-"
+						}
+						for key := range observed.Quota.Signals {
+							if strings.HasPrefix(key, prefix) {
+								t.Fatalf("incomplete usage window entered ordinary snapshot: %s", key)
+							}
+						}
+					}
 				}
 				observe(partial.window)
 				if _, errSelect := manager.SelectAuth(ctx, "claude", "", coreexecutor.Options{}); errSelect == nil {
 					t.Fatal("first incomplete reading admitted the protected account")
+				}
+				if partial.name == "missing-reset" {
+					observe(low)
+					observe(partial.window)
+					if _, errSelect := manager.SelectAuth(ctx, "claude", "", coreexecutor.Options{}); errSelect == nil {
+						t.Fatal("known high usage without reset was lost after a prior low reading")
+					}
 				}
 				observe(high)
 				if _, errSelect := manager.SelectAuth(ctx, "claude", "", coreexecutor.Options{}); errSelect == nil {
