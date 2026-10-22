@@ -1,4 +1,4 @@
 allowBuilds:
   esbuild: false
 overrides:
-  "@modelcontextprotocol/server": 2.3.1
+  '@modelcontextprotocol/server': 2.3.1
