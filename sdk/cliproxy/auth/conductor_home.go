@@ -952,6 +952,11 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 	if m == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
+	for _, reserve := range m.quotaReserves() {
+		if reserve.Percent > 0 {
+			return nil, &Error{Code: "quota_reserve_home_unsupported", Message: "quota reserves require local credential selection", HTTPStatus: http.StatusServiceUnavailable}
+		}
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

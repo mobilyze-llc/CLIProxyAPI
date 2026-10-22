@@ -71,12 +71,13 @@ func ParseClaudeUsageHeaders(body []byte) http.Header {
 		window := gjson.GetBytes(body, path)
 		utilization := window.Get("utilization")
 		resetAt, errParse := time.Parse(time.RFC3339, window.Get("resets_at").String())
-		if utilization.Type != gjson.Number || errParse != nil {
-			continue
-		}
 		prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
-		headers.Set(prefix+"Utilization", strconv.FormatFloat(utilization.Float()/100, 'f', -1, 64))
-		headers.Set(prefix+"Reset", strconv.FormatInt(resetAt.Unix(), 10))
+		if utilization.Type == gjson.Number {
+			headers.Set(prefix+"Utilization", strconv.FormatFloat(utilization.Float()/100, 'f', -1, 64))
+		}
+		if errParse == nil {
+			headers.Set(prefix+"Reset", strconv.FormatInt(resetAt.Unix(), 10))
+		}
 	}
 	if len(headers) == 0 {
 		return nil

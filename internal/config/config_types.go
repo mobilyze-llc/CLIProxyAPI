@@ -350,6 +350,8 @@ type QuotaExceeded struct {
 
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
+	QuotaReserves []QuotaReserve `yaml:"quota-reserves,omitempty" json:"quota-reserves,omitempty"`
+
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first", "soonest-reset".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
@@ -371,6 +373,12 @@ type RoutingConfig struct {
 	// When false, subagents are distributed across the credential pool via the fallback selector.
 	// Default: true. Ignored when SessionAffinity is false.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
+}
+
+type QuotaReserve struct {
+	Provider string  `yaml:"provider" json:"provider"`
+	Email    string  `yaml:"email" json:"email"`
+	Percent  float64 `yaml:"percent" json:"percent"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

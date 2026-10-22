@@ -127,6 +127,7 @@ access:
 # Routing strategy for selecting credentials when multiple match.
 routing:
   strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, soonest-reset
+  quota-reserves: []
   # soonest-reset prefers the credential whose weekly (7-day) quota window resets soonest, so
   # quota is used before it expires. Reset times are learned from Claude/Codex response headers.
   # A credential with an exhausted window is skipped until that window resets. An unknown Claude

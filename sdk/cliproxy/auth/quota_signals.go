@@ -33,9 +33,12 @@ func ProviderSupportsQuotaObservation(provider string) bool {
 // indefinitely. Responses that carry no quota signal at all (transport
 // failures, 5xx, unrelated endpoints) leave the previous snapshot untouched.
 //
-// This function only ever touches ObservedAt and Signals. Cooldown and
-// scheduling fields are never read or written here.
+// Cooldown and scheduling fields are never read or written here.
 func (q *QuotaState) ObserveResponseHeadersForProvider(provider string, headers http.Header, observedAt time.Time) bool {
+	return q.observeHeaders(provider, headers, observedAt, false)
+}
+
+func (q *QuotaState) observeHeaders(provider string, headers http.Header, observedAt time.Time, usageRead bool) bool {
 	if q == nil {
 		return false
 	}
@@ -49,23 +52,32 @@ func (q *QuotaState) ObserveResponseHeadersForProvider(provider string, headers 
 	if observedAt.IsZero() {
 		observedAt = time.Now()
 	}
-	q.Signals = next
-	q.ObservedAt = observedAt
+	if q.ReserveWindows == nil {
+		q.observeReserveWindows(provider, q.Signals, q.ObservedAt)
+	}
+	q.observeReserveWindows(provider, next, observedAt)
+	if usageRead && strings.EqualFold(strings.TrimSpace(provider), "claude") {
+		next = completeClaudeUsageSignals(next)
+	}
+	if len(next) > 0 {
+		q.Signals = next
+		q.ObservedAt = observedAt
+	}
 	return true
 }
 
-// ObserveQuotaHeaders records a quota snapshot read outside the request path,
-// such as a usage endpoint, on the registered credential. It touches only the
-// credential-wide observation: counters, availability, cooldown fields and the
-// auth record on disk stay unchanged. A snapshot without quota signals leaves
-// the previous observation in place.
+// ObserveQuotaHeaders records a usage-endpoint observation on the registered
+// credential. Partial windows update reserve evidence; only complete Claude
+// windows replace the ordinary routing snapshot. It leaves counters, availability,
+// cooldown fields and the auth record on disk unchanged. No quota signals leaves
+// both observations unchanged.
 func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.Lock()
 	auth := m.auths[authID]
-	observed := auth != nil && auth.Quota.ObserveResponseHeadersForProvider(auth.Provider, headers, time.Now())
+	observed := auth != nil && auth.Quota.observeHeaders(auth.Provider, headers, time.Now(), true)
 	m.mu.Unlock()
 	if observed {
 		m.persistCooldownStates(context.Background())
@@ -73,13 +85,27 @@ func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
 	return observed
 }
 
+func completeClaudeUsageSignals(signals map[string]string) map[string]string {
+	complete := make(map[string]string, 4)
+	for _, name := range []string{"5h", "7d"} {
+		prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
+		usage, reset := prefix+"Utilization", prefix+"Reset"
+		if signals[usage] != "" && signals[reset] != "" {
+			complete[usage] = signals[usage]
+			complete[reset] = signals[reset]
+		}
+	}
+	return complete
+}
+
 // ClearObservationSignals removes only passive observation data. It leaves
 // cooldown and scheduler state untouched.
 func (q *QuotaState) ClearObservationSignals() bool {
-	if q == nil || (len(q.Signals) == 0 && q.ObservedAt.IsZero()) {
+	if q == nil || (len(q.Signals) == 0 && len(q.ReserveWindows) == 0 && q.ObservedAt.IsZero()) {
 		return false
 	}
 	q.Signals = nil
+	q.ReserveWindows = nil
 	q.ObservedAt = time.Time{}
 	return true
 }
@@ -238,6 +264,7 @@ func isQuotaSignalHeaderForProvider(provider, name string) bool {
 // unioning signals captured at different times, so merging an older snapshot
 // can never resurrect a stale watermark.
 func mergeQuotaObservation(target, source QuotaState) QuotaState {
+	target.ReserveWindows = mergeReserveWindows(target.ReserveWindows, source.ReserveWindows)
 	if source.ObservedAt.IsZero() || source.ObservedAt.Before(target.ObservedAt) {
 		return target
 	}

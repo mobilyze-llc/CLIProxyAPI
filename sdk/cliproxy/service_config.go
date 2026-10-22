@@ -118,6 +118,11 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		return configCommit{}
 	}
 
+	if errValidate := newCfg.ValidateQuotaReserves(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid quota reserves")
+		return configCommit{}
+	}
+
 	s.cfgMu.Lock()
 	s.cfg = newCfg
 	s.cfgMu.Unlock()

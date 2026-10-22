@@ -664,7 +664,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 		return records
 	}
 	attach := func(model string, quota QuotaState, updatedAt time.Time) {
-		if quota.ObservedAt.IsZero() || len(quota.Signals) == 0 {
+		if (quota.ObservedAt.IsZero() || len(quota.Signals) == 0) && len(quota.ReserveWindows) == 0 {
 			return
 		}
 		observation := quota.Clone()
@@ -672,6 +672,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 			if records[i].Model == model {
 				records[i].Quota.ObservedAt = observation.ObservedAt
 				records[i].Quota.Signals = observation.Signals
+				records[i].Quota.ReserveWindows = observation.ReserveWindows
 				return
 			}
 		}
@@ -681,7 +682,7 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 			AuthFile:  cooldownAuthFile(auth),
 			Model:     model,
 			Status:    cooldownStateStatusObserved,
-			Quota:     QuotaState{ObservedAt: observation.ObservedAt, Signals: observation.Signals},
+			Quota:     QuotaState{ObservedAt: observation.ObservedAt, Signals: observation.Signals, ReserveWindows: observation.ReserveWindows},
 			UpdatedAt: updatedAt,
 		})
 	}
@@ -701,14 +702,14 @@ func withQuotaObservations(auth *Auth, records []CooldownStateRecord) []Cooldown
 // state. The newest observation wins, so a live response after startup is kept.
 func (m *Manager) restoreQuotaObservationLocked(record CooldownStateRecord) bool {
 	quota := record.Quota
-	if quota.ObservedAt.IsZero() || len(quota.Signals) == 0 {
+	if (quota.ObservedAt.IsZero() || len(quota.Signals) == 0) && len(quota.ReserveWindows) == 0 {
 		return false
 	}
 	auth := m.auths[strings.TrimSpace(record.AuthID)]
 	if auth == nil || auth.Disabled || auth.Status == StatusDisabled || !ProviderSupportsQuotaObservation(auth.Provider) {
 		return false
 	}
-	observation := QuotaState{ObservedAt: quota.ObservedAt, Signals: quota.Clone().Signals}
+	observation := quota.Clone()
 	model := strings.TrimSpace(record.Model)
 	if model == "" {
 		before := auth.Quota.ObservedAt
