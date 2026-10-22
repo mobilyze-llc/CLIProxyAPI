@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@modelcontextprotocol/server': 2.3.1
+
 importers:
 
   .:
@@ -191,12 +194,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@modelcontextprotocol/core@2.2.0':
-    resolution: {integrity: sha512-iLhmprRmWI8EcosOA3wVvww22z02NkgqhV4fBH6f/odQBsi7xnJc0HGmi21yWO+/iKw2yzqVE127Zhna5/+JXw==}
+  '@modelcontextprotocol/core@2.3.1':
+    resolution: {integrity: sha512-laVmIhPGpWi7rG9q+0UigblRN0Hws/Yjlb6qLFtVqryXVLkc4h+yN8z731POD2LnAGQlFe7/tXhUm7Bi0YB91g==}
     engines: {node: '>=20'}
 
-  '@modelcontextprotocol/server@2.2.0':
-    resolution: {integrity: sha512-qFnltjus6Gk8Lx6J1w2RXmr3YPN22MNT6qD6zjAkaiWIlFIFxWClz0rXHNuJF/KSUyn5YGhkSvXkWDbQHVLFEQ==}
+  '@modelcontextprotocol/server@2.3.1':
+    resolution: {integrity: sha512-e59MfWuSssj6DoQ96JCTqdW1AXT5/XtnTl0WWd6MU1Ka434fFUGGosCLJbGNySDhHGvxQWoRWK137FXYFkYNWw==}
     engines: {node: '>=20'}
 
   '@oxfmt/binding-android-arm-eabi@0.71.0':
@@ -668,13 +671,13 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@modelcontextprotocol/core@2.2.0':
+  '@modelcontextprotocol/core@2.3.1':
     dependencies:
       zod: 4.6.1
 
-  '@modelcontextprotocol/server@2.2.0':
+  '@modelcontextprotocol/server@2.3.1':
     dependencies:
-      '@modelcontextprotocol/core': 2.2.0
+      '@modelcontextprotocol/core': 2.3.1
       zod: 4.6.1
 
   '@oxfmt/binding-android-arm-eabi@0.71.0':
@@ -833,7 +836,7 @@ snapshots:
     dependencies:
       '@ai-sdk/provider': 4.0.18
       '@clack/prompts': 1.8.1
-      '@modelcontextprotocol/server': 2.2.0
+      '@modelcontextprotocol/server': 2.3.1
       '@vitest/expect': 5.0.2
       commander: 15.0.0
       picocolors: 1.1.1
