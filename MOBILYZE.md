@@ -1,6 +1,6 @@
 # mobilyze-llc/CLIProxyAPI
 
-A private copy of [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that adds the `soonest-reset` credential selector (MASTRA-765). The selector sends each new session to the account whose weekly window resets soonest, among accounts that still have quota.
+A fork of [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that adds the `soonest-reset` credential selector (MASTRA-765). The selector sends each new session to the account whose weekly window resets soonest, among accounts that still have quota.
 
 - Base: upstream tag `v8.0.13` (d7914afd). Our commits sit on top of it on `main`.
 - To move to a new upstream tag: `git fetch upstream --tags`, then rebase our commits onto the tag.
@@ -47,3 +47,9 @@ cached scheduler. Other accounts retain their existing availability and routing 
 Reserve rules require local credential selection. An active reserve combined with `home.enabled`
 is rejected at startup, SDK construction and reload; Home dispatch also fails closed if an
 invalid combination is installed directly through the low-level manager API.
+
+## Merge policy
+
+Mergify merges changes to main after the required checks pass. Changes to authentication, quota
+routing, APIs, runtime executors, or merge configuration also require the Unfret App check.
+The `hold` label keeps a pull request open for operator review.
