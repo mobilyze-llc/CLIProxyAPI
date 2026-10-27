@@ -20,6 +20,9 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 	if opts.Alt == "responses/compact" {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
 	}
+	if xaiIsSpeechRequest(opts) {
+		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /audio/speech"}
+	}
 	if xaiInputHasItemType(req.Payload, "compaction_trigger") {
 		return e.executeCompactionTriggerStream(ctx, auth, req, opts)
 	}
@@ -35,9 +38,11 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, prepared.baseModel, auth)
 	defer reporter.TrackFailure(ctx, &err)
-	reporter.SetTranslatedReasoningEffort(prepared.body, e.Identifier())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
+	prepared.body = sanitizeXAIInputEncryptedContentForBaseURL(prepared.body, baseURL)
+	prepared.body = prepared.finalizePayload(prepared.body)
+	reporter.SetTranslatedReasoningEffort(prepared.body, e.Identifier())
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(prepared.body))
 	if err != nil {
 		return nil, err
@@ -89,7 +94,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		emitTranslatedLine := func(translatedLine []byte) bool {
 			lines, errBridge := prepared.applyPatch.Stream(translatedLine)
 			if errBridge != nil {
-				reporter.PublishFailure(ctx, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+				streamUsage.PublishFailure(ctx, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 			}
 			var chunks [][]byte
 			for _, line := range lines {
@@ -112,7 +117,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 				}
 				chunks = append(chunks, helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, line, &param, claudeInputTokens)...)
 			}
-			helps.RecordApplyPatchStreamFailure(ctx, param, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+			helps.RecordApplyPatchStreamFailureWithUsage(ctx, param, reporter, &streamUsage, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 			for i := range chunks {
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
@@ -120,12 +125,12 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 					return false
 				}
 			}
-			if helps.StopApplyPatchStream(ctx, param, reporter, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
+			if helps.StopApplyPatchStreamWithUsage(ctx, param, reporter, &streamUsage, out, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}) {
 				return false
 			}
 			if errBridge != nil {
 				errBridge = statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
-				reporter.PublishFailure(ctx, errBridge)
+				streamUsage.PublishFailure(ctx, reporter, errBridge)
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Err: errBridge}:
 				case <-ctx.Done():
@@ -202,7 +207,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		}
 		finishEvents, errFinish := prepared.applyPatch.FinishStream()
 		if errFinish != nil {
-			reporter.PublishFailure(ctx, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
+			streamUsage.PublishFailure(ctx, reporter, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage})
 		}
 		for _, event := range finishEvents {
 			for _, chunk := range helps.TranslateStreamWithClaudeInputTokens(ctx, prepared.to, prepared.responseFormat, req.Model, prepared.originalPayload, prepared.body, event, &param, claudeInputTokens) {
@@ -215,7 +220,7 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 		}
 		if errFinish != nil {
 			errFinish = statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
-			reporter.PublishFailure(ctx, errFinish)
+			streamUsage.PublishFailure(ctx, reporter, errFinish)
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Err: errFinish}:
 			case <-ctx.Done():
