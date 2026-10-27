@@ -1,6 +1,6 @@
 module github.com/router-for-me/CLIProxyAPI/v8
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/andybalholm/brotli v1.0.6
@@ -17,6 +17,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.18.7
 	github.com/libp2p/zeroconf/v2 v2.2.0
+	github.com/miekg/dns v1.1.43
 	github.com/minio/minio-go/v7 v7.0.66
 	github.com/pion/ice/v4 v4.3.0
 	github.com/pion/interceptor v0.1.45
@@ -44,7 +45,6 @@ require (
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
-	github.com/miekg/dns v1.1.43 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/logging v0.2.4 // indirect
@@ -107,7 +107,7 @@ require (
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.4.3-0.20260624044523-35f78d5908f1 // indirect
 	github.com/pierrec/xxHash v0.1.5
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
