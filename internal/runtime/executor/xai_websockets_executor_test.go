@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2118,6 +2119,48 @@ func TestXAIWebsocketsCompactionTriggerFreshSessionFallback(t *testing.T) {
 	}
 }
 
+func TestConfigureXAIWebsocketConnResetsTerminalErrorOnReplacement(t *testing.T) {
+	oldConn := &websocket.Conn{}
+	newConn := &websocket.Conn{}
+	sess := &codexWebsocketSession{conn: oldConn}
+	oldErr := errors.New("old connection terminated")
+	if !sess.markTerminalError(oldConn, oldErr) {
+		t.Fatal("old connection terminal error was not recorded")
+	}
+
+	sess.connMu.Lock()
+	sess.conn = newConn
+	sess.connMu.Unlock()
+	configureXAIWebsocketConn(sess, newConn)
+
+	sess.activeMu.Lock()
+	terminalConn, terminalErr := sess.terminalConn, sess.terminalErr
+	sess.activeMu.Unlock()
+	if terminalErr != nil {
+		t.Fatalf("terminal error after configuring replacement = %v, want nil", terminalErr)
+	}
+	if terminalConn != newConn {
+		t.Fatal("terminal state still references the old connection after replacement")
+	}
+	if sess.markTerminalError(oldConn, oldErr) {
+		t.Fatal("old connection overwrote the replacement terminal state")
+	}
+
+	newErr := errors.New("replacement connection terminated")
+	if !sess.markTerminalError(newConn, newErr) {
+		t.Fatal("replacement connection terminal error was not recorded")
+	}
+	readCh := sess.activate(newConn)
+	select {
+	case event, ok := <-readCh:
+		if !ok || event.conn != newConn || !errors.Is(event.err, newErr) {
+			t.Fatalf("replacement terminal event = %#v, want replacement connection error", event)
+		}
+	default:
+		t.Fatal("replacement connection terminal error was not replayed")
+	}
+}
+
 func TestXAIWebsockets_PingHandlerDoesNotBlockOnWriteMu(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverConnCh := make(chan *websocket.Conn, 1)
@@ -2189,10 +2232,14 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverPongCh := make(chan string, 1)
 	inWriteHook := make(chan struct{})
+	var inWriteHookOnce sync.Once
 	pongDeliveredDuringWrite := make(chan struct{})
+	var pongDeliveredOnce sync.Once
 
 	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
-		close(inWriteHook)
+		// A failed write is retried on a new connection, which runs the hook
+		// and the handler again; a second close would panic the package run.
+		inWriteHookOnce.Do(func() { close(inWriteHook) })
 		select {
 		case <-pongDeliveredDuringWrite:
 		case <-time.After(2 * time.Second):
@@ -2214,11 +2261,18 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			return nil
 		})
 
-		// The reader answers control frames until the client request arrives.
-		requestRead := make(chan struct{})
+		payloadReceived := make(chan struct{})
 		go func() {
-			_, _, _ = conn.ReadMessage()
-			close(requestRead)
+			signaled := false
+			for {
+				if _, _, errReadLoop := conn.ReadMessage(); errReadLoop != nil {
+					return
+				}
+				if !signaled {
+					signaled = true
+					close(payloadReceived)
+				}
+			}
 		}()
 
 		select {
@@ -2235,14 +2289,21 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			if got != "xai-session-ping" {
 				t.Errorf("unexpected pong payload: got %q, want xai-session-ping", got)
 			}
-			close(pongDeliveredDuringWrite)
+			pongDeliveredOnce.Do(func() { close(pongDeliveredDuringWrite) })
 		case <-time.After(2 * time.Second):
 			t.Errorf("pong was not received while payload write was in progress")
 			return
 		}
 
-		// Reply only after the request arrives, so the reply and close cannot race the held write.
-		<-requestRead
+		// The held client write is released together with the pong. Closing the
+		// socket before that payload arrives fails the write with "use of closed
+		// network connection", so answer only once the request is in.
+		select {
+		case <-payloadReceived:
+		case <-time.After(2 * time.Second):
+			t.Errorf("client payload never reached the server")
+			return
+		}
 		respPayload := []byte(`{"type":"response.done","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))
@@ -2286,10 +2347,14 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	serverPongCh := make(chan string, 1)
 	inWriteHook := make(chan struct{})
+	var inWriteHookOnce sync.Once
 	pongDeliveredDuringWrite := make(chan struct{})
+	var pongDeliveredOnce sync.Once
 
 	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
-		close(inWriteHook)
+		// A failed write is retried on a new connection, which runs the hook
+		// and the handler again; a second close would panic the package run.
+		inWriteHookOnce.Do(func() { close(inWriteHook) })
 		select {
 		case <-pongDeliveredDuringWrite:
 		case <-time.After(2 * time.Second):
@@ -2311,11 +2376,18 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			return nil
 		})
 
-		// The reader answers control frames until the client request arrives.
-		requestRead := make(chan struct{})
+		payloadReceived := make(chan struct{})
 		go func() {
-			_, _, _ = conn.ReadMessage()
-			close(requestRead)
+			signaled := false
+			for {
+				if _, _, errReadLoop := conn.ReadMessage(); errReadLoop != nil {
+					return
+				}
+				if !signaled {
+					signaled = true
+					close(payloadReceived)
+				}
+			}
 		}()
 
 		select {
@@ -2332,14 +2404,21 @@ func TestXAIWebsockets_KeepalivePingDuringUpload_Sessionless(t *testing.T) {
 			if got != "xai-sessionless-ping" {
 				t.Errorf("unexpected pong payload: got %q, want xai-sessionless-ping", got)
 			}
-			close(pongDeliveredDuringWrite)
+			pongDeliveredOnce.Do(func() { close(pongDeliveredDuringWrite) })
 		case <-time.After(2 * time.Second):
 			t.Errorf("pong was not received while payload write was in progress on sessionless connection")
 			return
 		}
 
-		// Reply only after the request arrives, so the reply and close cannot race the held write.
-		<-requestRead
+		// The held client write is released together with the pong. Closing the
+		// socket before that payload arrives fails the write with "use of closed
+		// network connection", so answer only once the request is in.
+		select {
+		case <-payloadReceived:
+		case <-time.After(2 * time.Second):
+			t.Errorf("client payload never reached the server")
+			return
+		}
 		respPayload := []byte(`{"type":"response.done","response":{"id":"resp-1","status":"completed","output":[]}}`)
 		_ = conn.WriteMessage(websocket.TextMessage, respPayload)
 	}))
@@ -2534,4 +2613,35 @@ func TestXAIWebsocketApplyPatchIncompleteEOF(t *testing.T) {
 	if streamErr == nil || !bytes.Contains(output, []byte(`"type":"response.failed"`)) || bytes.Count(output, []byte(`"type":"response.failed"`)) != 1 || bytes.Contains(output, []byte(`"type":"response.completed"`)) {
 		t.Fatalf("bridge EOF was not finished: %s err=%v", output, streamErr)
 	}
+}
+
+func TestApplyXAIWebsocketHeaders_UserAgent(t *testing.T) {
+	t.Run("defaults to Grok workspace User-Agent when downstream User-Agent is absent", func(t *testing.T) {
+		headers := applyXAIWebsocketHeaders(context.Background(), nil, &cliproxyauth.Auth{Provider: "xai"}, "token", "sess-1")
+		if got, want := headers.Get("User-Agent"), "xai-grok-workspace/"+xaiClientVersion(); got != want {
+			t.Fatalf("User-Agent = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("forwards downstream User-Agent when provided", func(t *testing.T) {
+		clientHeaders := http.Header{"User-Agent": []string{"ws-downstream-client/1.0"}}
+		headers := applyXAIWebsocketHeaders(context.Background(), nil, &cliproxyauth.Auth{Provider: "xai"}, "token", "sess-1", clientHeaders)
+		if got := headers.Get("User-Agent"); got != "ws-downstream-client/1.0" {
+			t.Fatalf("User-Agent = %q, want ws-downstream-client/1.0", got)
+		}
+	})
+
+	t.Run("custom header:User-Agent overrides downstream User-Agent", func(t *testing.T) {
+		clientHeaders := http.Header{"User-Agent": []string{"ws-downstream-client/1.0"}}
+		auth := &cliproxyauth.Auth{
+			Provider: "xai",
+			Attributes: map[string]string{
+				"header:User-Agent": "ws-custom-ua/2.0",
+			},
+		}
+		headers := applyXAIWebsocketHeaders(context.Background(), nil, auth, "token", "sess-1", clientHeaders)
+		if got := headers.Get("User-Agent"); got != "ws-custom-ua/2.0" {
+			t.Fatalf("User-Agent = %q, want ws-custom-ua/2.0", got)
+		}
+	})
 }
