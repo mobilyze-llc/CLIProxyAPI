@@ -73,6 +73,30 @@ func TestServiceApplyCoreAuthAddOrUpdate_DeleteReAddDoesNotInheritStaleRuntimeSt
 	}
 }
 
+// A watcher reload after a token refresh carries no quota observation; the runtime keeps it.
+func TestServiceApplyCoreAuthAddOrUpdate_TokenRefreshKeepsQuotaObservation(t *testing.T) {
+	service := &Service{cfg: &config.Config{}, coreManager: coreauth.NewManager(nil, nil, nil)}
+	authID := "service-quota-observation-auth"
+	t.Cleanup(func() { GlobalModelRegistry().UnregisterClient(authID) })
+	observedAt := time.Now()
+	signals := map[string]string{"X-Codex-Primary-Reset-At": "1900000000"}
+
+	service.applyCoreAuthAddOrUpdate(context.Background(), &coreauth.Auth{
+		ID: authID, Provider: "codex", Status: coreauth.StatusActive,
+		Metadata: map[string]any{"access_token": "old"},
+		Quota:    coreauth.QuotaState{ObservedAt: observedAt, Signals: signals},
+	})
+	service.applyCoreAuthAddOrUpdate(context.Background(), &coreauth.Auth{
+		ID: authID, Provider: "codex", Status: coreauth.StatusActive,
+		Metadata: map[string]any{"access_token": "refreshed"},
+	})
+
+	updated, ok := service.coreManager.GetByID(authID)
+	if !ok || !updated.Quota.ObservedAt.Equal(observedAt) || updated.Quota.Signals["X-Codex-Primary-Reset-At"] != "1900000000" {
+		t.Fatalf("quota after reload = %+v, want the earlier observation", updated.Quota)
+	}
+}
+
 func TestForceHomeRuntimeConfigEnablesUsageStatistics(t *testing.T) {
 	cfg := &config.Config{
 		UsageStatisticsEnabled: false,

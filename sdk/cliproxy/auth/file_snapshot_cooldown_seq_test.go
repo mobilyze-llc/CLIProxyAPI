@@ -80,3 +80,47 @@ func TestManager_Issue6643_CredentialQuotaCarryKeepsCooldownWatermark(t *testing
 		t.Fatalf("after the update quota=%+v seq=%d, want the credential_quota cooldown with seq %d", got.Quota, got.cooldownRecordedSeq, cooled.cooldownRecordedSeq)
 	}
 }
+
+func TestUpdateKeepsNewerIncomingReserveWindow(t *testing.T) {
+	now := time.Now()
+	older := quotaReserveWindow{ObservedAt: now.Add(-time.Hour), ResetAt: now.Add(24 * time.Hour), UsageTrusted: true, UsedPercent: 10}
+	newer := quotaReserveWindow{ObservedAt: now, ResetAt: now.Add(24 * time.Hour), UsageTrusted: true, UsedPercent: 90}
+	cases := []struct {
+		name     string
+		existing QuotaState
+		snapshot bool
+	}{
+		{name: "file snapshot", existing: QuotaState{ReserveWindows: map[string]quotaReserveWindow{"weekly": older}}, snapshot: true},
+		{name: "active credential_quota cooldown", existing: QuotaState{
+			Exceeded: true, Reason: "credential_quota", NextRecoverAt: now.Add(time.Hour),
+			ReserveWindows: map[string]quotaReserveWindow{"weekly": older},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const authID = "reserve-window-update-auth"
+			ctx := WithSkipPersist(context.Background())
+			manager := NewManager(nil, nil, nil)
+			if _, errRegister := manager.Register(ctx, &Auth{ID: authID, Provider: "codex", Status: StatusActive, Quota: tc.existing}); errRegister != nil {
+				t.Fatalf("register: %v", errRegister)
+			}
+			incoming := &Auth{ID: authID, Provider: "codex", Status: StatusActive, Quota: QuotaState{ReserveWindows: map[string]quotaReserveWindow{"weekly": newer}}}
+			if tc.snapshot {
+				path := filepath.Join(t.TempDir(), authID+".json")
+				data := []byte(`{"type":"codex"}`)
+				if errWrite := os.WriteFile(path, data, 0o600); errWrite != nil {
+					t.Fatal(errWrite)
+				}
+				incoming.Attributes = map[string]string{AttributePath: path}
+				incoming.BindFileSnapshot(path, data)
+			}
+			if _, errUpdate := manager.Update(ctx, incoming); errUpdate != nil {
+				t.Fatalf("update: %v", errUpdate)
+			}
+			got, _ := manager.GetByID(authID)
+			if window := got.Quota.ReserveWindows["weekly"]; !window.ObservedAt.Equal(newer.ObservedAt) || window.UsedPercent != newer.UsedPercent {
+				t.Fatalf("weekly reserve window = %+v, want the newer incoming window %+v", window, newer)
+			}
+		})
+	}
+}
