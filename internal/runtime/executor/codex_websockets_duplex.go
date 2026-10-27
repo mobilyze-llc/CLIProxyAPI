@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
@@ -135,7 +136,41 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				return false
 			}
 		}
+		initialModel := ""
+		if initial != nil {
+			initialModel = strings.TrimSpace(gjson.GetBytes(initial.originalPayload, "model").String())
+		}
+		boundModel := helps.PayloadRequestedModel(opts, initialModel)
+		if boundModel == "" {
+			boundModel = req.Model
+		}
+		authorizePayload := func(payload []byte, forceBoundModel bool) (allowed bool, keepOpen bool) {
+			authPayload := payload
+			explicitModel := strings.TrimSpace(gjson.GetBytes(authPayload, "model").String())
+			if boundModel != "" && json.Valid(authPayload) && (forceBoundModel || explicitModel == "" || explicitModel == req.Model) {
+				if withModel, errSet := sjson.SetBytes(bytes.Clone(authPayload), "model", boundModel); errSet == nil {
+					authPayload = withModel
+				}
+			}
+			errPayload, errAuth := cliproxyexecutor.AuthorizeWebsocketTurn(streamCtx, authPayload)
+			if errAuth != nil {
+				fail(errAuth)
+				return false, false
+			}
+			if len(errPayload) > 0 {
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Payload: errPayload}:
+					return false, true
+				case <-streamCtx.Done():
+					return false, false
+				}
+			}
+			return true, true
+		}
 		processCreatePayload := func(payload []byte) bool {
+			if allowed, keepOpen := authorizePayload(payload, false); !allowed {
+				return keepOpen
+			}
 			metadataMu.Lock()
 			isAppend := gjson.GetBytes(payload, "type").String() == "response.append"
 			prevID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
@@ -152,14 +187,14 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				return true
 			}
 			model := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
-			if model != "" && model != req.Model && model != gjson.GetBytes(initial.originalPayload, "model").String() {
+			if model != "" && model != req.Model && model != boundModel {
 				fail(cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError())
 				return false
 			}
 			if model == "" {
 				model = req.Model
 				if model == "" {
-					model = strings.TrimSpace(gjson.GetBytes(initial.originalPayload, "model").String())
+					model = boundModel
 				}
 				payload, _ = sjson.SetBytes(payload, "model", model)
 			}
@@ -200,7 +235,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				fail(cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError())
 				return false
 			}
-			payload = buildCodexWebsocketRequestBody(prepared.clientBody)
+			payload = frameCodexWebsocketRequestBody(prepared.clientBody)
 			metadataMu.Lock()
 			if len(pending) >= 16 {
 				metadataMu.Unlock()
@@ -277,6 +312,20 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				}
 				switch gjson.GetBytes(payload, "type").String() {
 				case "response.steer":
+					if allowed, keepOpen := authorizePayload(payload, true); !allowed {
+						if !keepOpen {
+							return
+						}
+						continue
+					}
+					// Steering carries business input but must not inherit response.create defaults.
+					steerReq := req
+					steerReq.Payload = payload
+					if codexUseSIWCForRequest(ctx, auth, opts.Headers) {
+						payload = thinking.StripConfigurationUpdates(payload)
+					}
+					payload = helps.NewPayloadFinalizer(e.cfg, "codex-websockets", thinking.ParseSuffix(req.Model).ModelName, "codex", "", payload, steerReq, opts)(payload)
+					payload, _ = sjson.SetBytes(payload, "type", "response.steer")
 					parent := gjson.GetBytes(payload, "previous_response_id").String()
 					metadataMu.Lock()
 					settings := responseSettings[parent]
@@ -295,8 +344,9 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 						steeringSettings[parent] = settings
 					}
 					metadataMu.Unlock()
-					// Control frames bypass ALL response.create translations and defaults.
-					// Unknown fields and unsupported input are left to upstream validation.
+					// Control frames bypass response.create translations and built-in defaults.
+					// Except for SIWC configuration_update stripping, unknown fields and unsupported
+					// input are left to upstream validation.
 					if !cliproxyexecutor.WebsocketAuthEnabled(streamCtx, auth.ID) {
 						fail(fmt.Errorf("websocket credential is no longer enabled"))
 						return
@@ -420,6 +470,9 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				}
 				if inst := gjson.GetBytes(current.clientBody, "instructions"); inst.Exists() {
 					snapshot.clientBody, _ = sjson.SetRawBytes(snapshot.clientBody, "instructions", []byte(inst.Raw))
+				}
+				if serviceTier := gjson.GetBytes(current.clientBody, "service_tier"); serviceTier.Exists() {
+					snapshot.clientBody, _ = sjson.SetRawBytes(snapshot.clientBody, "service_tier", []byte(serviceTier.Raw))
 				}
 				responseSettings[responseID] = &snapshot
 				responseOrder = append(responseOrder, responseID)

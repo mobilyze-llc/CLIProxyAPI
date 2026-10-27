@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"compress/flate"
 	"context"
 	"errors"
 	"fmt"
@@ -41,9 +42,14 @@ func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *
 	}
 	closer := newWebsocketConnectionCloser(conn)
 	if conn != nil {
-		// Avoid gorilla/websocket flate tail validation issues on some upstreams/Go versions.
-		// Negotiating permessage-deflate is fine; we just don't compress outbound messages.
-		conn.EnableWriteCompression(false)
+		enabled := e.cfg == nil || e.cfg.Codex.WebsocketCompressionEnabled()
+		conn.EnableWriteCompression(enabled)
+		if enabled {
+			// DefaultCompression avoids the fast flate tail path; configuration remains an escape hatch.
+			if errSetCompressionLevel := conn.SetCompressionLevel(flate.DefaultCompression); errSetCompressionLevel != nil {
+				log.Errorf("set Codex websocket compression level: %v", errSetCompressionLevel)
+			}
+		}
 	}
 	return conn, closer, resp, err
 }
@@ -132,14 +138,14 @@ func normalizeCodexWebsocketParallelToolCalls(body []byte, headers http.Header) 
 }
 
 func buildCodexWebsocketRequestBody(body []byte) []byte {
+	return frameCodexWebsocketRequestBody(helps.SanitizeCodexInputItemIDs(body))
+}
+
+// Framing must not normalize the configured business payload.
+func frameCodexWebsocketRequestBody(body []byte) []byte {
 	if len(body) == 0 {
 		return nil
 	}
-
-	// Match codex-rs websocket v2 semantics: every request is `response.create`.
-	// Incremental follow-up turns continue on the same websocket using
-	// `previous_response_id` + incremental `input`, not `response.append`.
-	body = helps.SanitizeCodexInputItemIDs(body)
 	wsReqBody, errSet := sjson.SetBytes(body, "type", "response.create")
 	if errSet == nil && len(wsReqBody) > 0 {
 		return wsReqBody
