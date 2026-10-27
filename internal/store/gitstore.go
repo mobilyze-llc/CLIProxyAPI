@@ -1560,7 +1560,7 @@ func isRepositoryCorruptionError(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) && err != nil && strings.Contains(err.Error(), "packhandle:")
 }
 
-func verifyRepositoryHead(repo *git.Repository) error {
+func verifyRepositoryHead(repo *git.Repository) (result error) {
 	if repo == nil {
 		return fmt.Errorf("repository is nil")
 	}
@@ -1571,6 +1571,11 @@ func verifyRepositoryHead(repo *git.Repository) error {
 		}
 		return errHead
 	}
+	defer func() {
+		if errors.Is(result, fs.ErrNotExist) {
+			result = fmt.Errorf("%w: %w", plumbing.ErrObjectNotFound, result)
+		}
+	}()
 	commit, errCommit := repo.CommitObject(head.Hash())
 	if errCommit != nil {
 		return errCommit

@@ -226,7 +226,8 @@ func applyClaudeOAuthAxiosHeaders(req *http.Request) {
 
 // fetchOAuthControlPlaneJSON issues an Axios-shaped OAuth control-plane GET and
 // returns the decoded response body. label names the endpoint in error text.
-func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, accessToken, label string) ([]byte, error) {
+// setHeaders, when non-nil, adjusts the default headers before the request is sent.
+func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, accessToken, label string, setHeaders func(http.Header)) ([]byte, error) {
 	if o == nil || o.httpClient == nil {
 		return nil, fmt.Errorf("fetch Claude OAuth %s: HTTP client is nil", label)
 	}
@@ -241,6 +242,9 @@ func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, a
 	applyClaudeOAuthAxiosHeaders(req)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Cache-Control", "no-cache")
+	if setHeaders != nil {
+		setHeaders(req.Header)
+	}
 
 	resp, errDo := o.httpClient.Do(req)
 	if errDo != nil {
@@ -263,7 +267,7 @@ func (o *ClaudeAuth) fetchOAuthControlPlaneJSON(ctx context.Context, endpoint, a
 
 // FetchOAuthProfile retrieves the account identity associated with an OAuth access token.
 func (o *ClaudeAuth) FetchOAuthProfile(ctx context.Context, accessToken string) (*OAuthProfile, error) {
-	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, ProfileURL, accessToken, "profile")
+	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, ProfileURL, accessToken, "profile", nil)
 	if errFetch != nil {
 		return nil, errFetch
 	}
@@ -282,7 +286,7 @@ func (o *ClaudeAuth) FetchOAuthProfile(ctx context.Context, accessToken string) 
 // covered by captured evidence, so the payload stays opaque and is returned raw
 // instead of being decoded into a guessed structure.
 func (o *ClaudeAuth) FetchOAuthRoles(ctx context.Context, accessToken string) (json.RawMessage, error) {
-	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, RolesURL, accessToken, "claude_cli roles")
+	body, errFetch := o.fetchOAuthControlPlaneJSON(ctx, RolesURL, accessToken, "claude_cli roles", nil)
 	if errFetch != nil {
 		return nil, errFetch
 	}

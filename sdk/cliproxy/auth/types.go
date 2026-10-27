@@ -325,7 +325,8 @@ type QuotaState struct {
 	// expired watermark cannot linger after the response that produced it.
 	// Cooldown transitions must use applyCooldownFields so they cannot replace
 	// this snapshot.
-	Signals map[string]string `json:"signals,omitempty"`
+	Signals        map[string]string             `json:"signals,omitempty"`
+	ReserveWindows map[string]quotaReserveWindow `json:"reserve_windows,omitempty"`
 }
 
 // Clone returns an independent copy of the quota state.
@@ -335,6 +336,12 @@ func (q QuotaState) Clone() QuotaState {
 		copyQuota.Signals = make(map[string]string, len(q.Signals))
 		for key, value := range q.Signals {
 			copyQuota.Signals[key] = value
+		}
+	}
+	if q.ReserveWindows != nil {
+		copyQuota.ReserveWindows = make(map[string]quotaReserveWindow, len(q.ReserveWindows))
+		for key, value := range q.ReserveWindows {
+			copyQuota.ReserveWindows[key] = value
 		}
 	}
 	return copyQuota

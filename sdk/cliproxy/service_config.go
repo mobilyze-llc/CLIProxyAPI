@@ -78,6 +78,8 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
+	case "soonest-reset", "soonestreset", "reset-first":
+		state.strategy = "soonest-reset"
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -104,6 +106,8 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
+	case "soonest-reset":
+		selector = &coreauth.SoonestResetSelector{}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}
@@ -155,6 +159,11 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected invalid model catalog sources")
 		return configCommit{}
 	}
+	if errValidate := newCfg.ValidateQuotaReserves(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid quota reserves")
+		return configCommit{}
+	}
+
 	s.cfgMu.Lock()
 	s.cfg = newCfg
 	s.cfgMu.Unlock()

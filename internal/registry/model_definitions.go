@@ -244,17 +244,35 @@ func GetXAIModels() []*ModelInfo {
 	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
 }
 
-// WithCodexBuiltins injects hard-coded Codex-only model definitions that should
-// not depend on remote models.json updates. Built-ins replace any matching IDs
-// already present in the provided slice.
+// WithCodexBuiltins supplements Codex catalogs with built-in model definitions.
+// Image definitions replace matching IDs; Terra is added only when absent.
 func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
-	return upsertModelInfos(models,
+	models = upsertModelInfos(models,
 		codexBuiltinImage15ModelInfo(),
 		codexBuiltinImageModelInfo(),
 		codexBuiltinImage25FlareModelInfo(),
 		codexBuiltinImage25SunburstModelInfo(),
 		codexBuiltinImage25ModelInfo(),
 	)
+	for _, model := range models {
+		if model != nil && model.ID == "gpt-6.1-terra" {
+			return models
+		}
+	}
+	return append(models, &ModelInfo{
+		ID:                       "gpt-6.1-terra",
+		Object:                   "model",
+		OwnedBy:                  "openai",
+		Type:                     "openai",
+		DisplayName:              "GPT-6.1 Terra",
+		Version:                  "gpt-6.1-terra",
+		Description:              "Fast, efficient model for writing, visual understanding, and computer use.",
+		ContextLength:            500000,
+		SupportedInputModalities: []string{"text", "image"},
+		Thinking: &ThinkingSupport{
+			Levels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		},
+	})
 }
 
 // WithXAIBuiltins injects hard-coded xAI image, video, and speech model definitions

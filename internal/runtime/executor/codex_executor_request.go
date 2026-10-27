@@ -446,15 +446,28 @@ func applyCodexHeadersWithSIWC(r *http.Request, auth *cliproxyauth.Auth, useSIWC
 	misc.EnsureHeader(r.Header, ginHeaders, "Session-Id", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Openai-Internal-Codex-Responses-Lite", "")
 
-	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
-
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
 	} else {
 		r.Header.Set("Accept", "application/json")
 	}
 	r.Header.Set("Connection", "Keep-Alive")
+	applyCodexIdentityHeaders(r, auth, token, cfg, ginHeaders)
+}
+
+// applyCodexIdentityHeaders sets the credential and client identity HTTP inference
+// sends: the bearer token, User-Agent, Originator, ChatGPT account, credential custom
+// headers and cloaking. The usage read calls it without client headers, so with
+// cloaking off and no configured User-Agent, inference forwards the client's
+// User-Agent while the usage read sends the default Codex User-Agent.
+func applyCodexIdentityHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, cfg *config.Config, ginHeaders http.Header) {
+	if strings.TrimSpace(token) != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		r.Header.Del("Authorization")
+	}
+	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
+	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 
 	isAPIKey := codexAuthUsesAPIKey(auth)
 	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
@@ -464,7 +477,7 @@ func applyCodexHeadersWithSIWC(r *http.Request, auth *cliproxyauth.Auth, useSIWC
 	}
 	if !isAPIKey {
 		if auth != nil && auth.Metadata != nil {
-			if accountID, ok := auth.Metadata["account_id"].(string); ok {
+			if accountID, ok := auth.Metadata["account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
 				r.Header.Set("Chatgpt-Account-Id", accountID)
 			}
 		}

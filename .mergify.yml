@@ -1,0 +1,35 @@
+merge_queue:
+  mode: serial
+  max_parallel_checks: 1
+queue_rules:
+  - name: default
+    checks_timeout: null
+    queue_conditions: []
+    merge_conditions: []
+merge_protections_settings:
+  reporting_method: check-runs
+  post_comment: false
+  auto_merge_conditions:
+    - base = main
+merge_protections:
+  - name: Required checks
+    if:
+      - base = main
+    success_conditions:
+      - -draft
+      - -label = hold
+      - check-success = go
+      - check-success = e2e-hermetic
+      - check-success = Analyze (actions)
+      - check-success = Analyze (go)
+      - check-success = Analyze (javascript-typescript)
+  - name: Unfret on risky paths
+    if:
+      - base = main
+      - or:
+          - files ~= (?i)(auth|secret|credential|migration|quota)
+          - files ~= ^sdk/(access|api|cliproxy)/
+          - files ~= ^internal/(access|api|config|home|runtime/executor)/
+          - files ~= ^(\.github/|\.mergify(\.ya?ml\Z|/))
+    success_conditions:
+      - check-success = @unfret/Unfret

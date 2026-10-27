@@ -456,8 +456,10 @@ type QuotaExceeded struct {
 
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
+	QuotaReserves []QuotaReserve `yaml:"quota-reserves,omitempty" json:"quota-reserves,omitempty"`
+
 	// Strategy selects the credential selection strategy.
-	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
+	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first", "soonest-reset".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
@@ -487,6 +489,12 @@ type RoutingConfig struct {
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+}
+
+type QuotaReserve struct {
+	Provider string  `yaml:"provider" json:"provider"`
+	Email    string  `yaml:"email" json:"email"`
+	Percent  float64 `yaml:"percent" json:"percent"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

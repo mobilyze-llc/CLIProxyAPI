@@ -52,6 +52,9 @@ var claudeOAuthInspectTargets = []string{
 
 func claudeOAuthRequestHeaderOrder(method, requestTarget string) []string {
 	if method == http.MethodGet {
+		if strings.HasPrefix(requestTarget, claudeOAuthUsagePath) {
+			return claudeOAuthUsageHeaderOrder
+		}
 		for _, target := range claudeOAuthInspectTargets {
 			if strings.HasPrefix(requestTarget, target) {
 				return claudeOAuthInspectHeaderOrder

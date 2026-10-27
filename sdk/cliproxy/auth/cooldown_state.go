@@ -36,6 +36,8 @@ type CooldownStateRecord struct {
 	CredentialQuotaPropagated bool `json:"credential_quota_propagated,omitempty"`
 }
 
+const cooldownStateStatusObserved = "observed"
+
 // CooldownStateStore persists runtime cooldown state independently from auth tokens.
 type CooldownStateStore interface {
 	Load(context.Context) ([]CooldownStateRecord, error)
