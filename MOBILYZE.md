@@ -2,10 +2,13 @@
 
 A fork of [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that adds the `soonest-reset` credential selector (MASTRA-765). The selector sends each new session to the account whose weekly window resets soonest, among accounts that still have quota.
 
-- Base: upstream tag `v8.0.13` (d7914afd). Our commits sit on top of it on `main`.
-- To move to a new upstream tag: `git fetch upstream --tags`, then rebase our commits onto the tag.
+- Base: upstream tag `v8.0.44` (1f917e77), merged into `main` by merge commit `7f7d7a61`.
+- To move to a new upstream tag: `git fetch upstream --tags`, create a branch from `main`, and
+  merge the tag into it. Keep `.github/workflows/` to our own workflows. Land the branch through
+  a normal pull request, which Mergify merges with a merge commit. Do not rebase: a rebase needs a
+  force-push past the `non_fast_forward` rule on `main`.
 - Never push upstream tags to this repo. Upstream's release and Docker workflows were removed, but a pushed upstream tag still carries them in its own tree.
-- Our releases use tags of the form `v8.0.13-mob.N`.
+- Our releases use tags of the form `v8.0.44-mob.N`.
 - Selector source: zsprackett/CLIProxyAPI commits `faa4ccff`, `01ad0021` and `67f5749d` (MIT), with authorship kept. `4d7b2e84` (model-scoped weekly windows) was left out.
 
 ## Subscription reserves
