@@ -1,6 +1,6 @@
 # mobilyze-llc/CLIProxyAPI
 
-A fork of [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that adds the `soonest-reset` credential selector (MASTRA-765). The selector sends each new session to the account whose weekly window resets soonest, among accounts that still have quota.
+A fork of [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) that adds the `soonest-reset` credential selector (MASTRA-765). The selector sends each new session to the account whose weekly window resets soonest, among accounts that still have quota. New sessions rotate across the accounts of that provider whose weekly resets fall within an hour of the soonest one.
 
 - Base: upstream tag `v8.0.44` (1f917e77), merged into `main` by merge commit `7f7d7a61`.
 - To move to a new upstream tag: `git fetch upstream --tags`, create a branch from `main`, and

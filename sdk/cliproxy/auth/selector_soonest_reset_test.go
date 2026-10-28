@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -421,5 +422,110 @@ func TestSoonestResetSelector_IncomingObservationReplacesOld(t *testing.T) {
 	}
 	if got := pickSession(t, manager, "after-update"); got != "soonest-incoming-a" {
 		t.Fatalf("new session after update = %q, want soonest-incoming-a", got)
+	}
+}
+
+func pickSequence(t *testing.T, selector *SoonestResetSelector, picks int, auths ...*Auth) []string {
+	t.Helper()
+	var ids []string
+	for range picks {
+		got, err := selector.Pick(context.Background(), "", "", cliproxyexecutor.Options{}, auths)
+		if err != nil {
+			t.Fatalf("Pick() error = %v", err)
+		}
+		ids = append(ids, got.ID)
+	}
+	return ids
+}
+
+func assertSequence(t *testing.T, got []string, want ...string) {
+	t.Helper()
+	if !slices.Equal(got, want) {
+		t.Fatalf("picks = %v, want %v", got, want)
+	}
+}
+
+func TestSoonestResetSelectorPick_RotatesWithinResetHour(t *testing.T) {
+	t.Parallel()
+
+	reset := time.Now().Add(2 * day)
+	assertSequence(t, pickSequence(t, &SoonestResetSelector{}, 4,
+		codexWeeklyAuth("c", 50, reset.Add(40*time.Minute)),
+		codexWeeklyAuth("a", 50, reset),
+		codexWeeklyAuth("b", 50, reset.Add(10*time.Minute)),
+	), "a", "b", "c", "a")
+}
+
+func TestSoonestResetSelectorPick_ResetGroupBoundary(t *testing.T) {
+	t.Parallel()
+
+	reset := time.Now().Add(2 * day)
+	assertSequence(t, pickSequence(t, &SoonestResetSelector{}, 4,
+		codexWeeklyAuth("a", 50, reset),
+		codexWeeklyAuth("b", 50, reset.Add(time.Hour)),
+		codexWeeklyAuth("c", 50, reset.Add(time.Hour+time.Second)),
+	), "a", "b", "a", "b")
+}
+
+func TestSoonestResetSelectorPick_ResetGroupDoesNotChain(t *testing.T) {
+	t.Parallel()
+
+	reset := time.Now().Add(2 * day)
+	assertSequence(t, pickSequence(t, &SoonestResetSelector{}, 4,
+		codexWeeklyAuth("a", 50, reset),
+		codexWeeklyAuth("b", 50, reset.Add(50*time.Minute)),
+		codexWeeklyAuth("c", 50, reset.Add(100*time.Minute)),
+	), "a", "b", "a", "b")
+}
+
+func TestSoonestResetSelectorPick_ResetGroupSkipsExhausted(t *testing.T) {
+	t.Parallel()
+
+	reset := time.Now().Add(2 * day)
+	assertSequence(t, pickSequence(t, &SoonestResetSelector{}, 4,
+		codexWeeklyAuth("a", 50, reset),
+		codexWeeklyAuth("b", 100, reset.Add(10*time.Minute)),
+		codexWeeklyAuth("c", 50, reset.Add(20*time.Minute)),
+	), "a", "c", "a", "c")
+}
+
+func TestSoonestResetSelectorPick_UnknownClaudeResetsKeepOrder(t *testing.T) {
+	t.Parallel()
+
+	assertSequence(t, pickSequence(t, &SoonestResetSelector{}, 3,
+		&Auth{ID: "a", Provider: "claude"},
+		&Auth{ID: "b", Provider: "claude"},
+		&Auth{ID: "c", Provider: "claude"},
+	), "a", "a", "a")
+}
+
+func TestSoonestResetSelectorPick_ResetGroupHoldsWinnerProvider(t *testing.T) {
+	t.Parallel()
+
+	reset := time.Now().Add(2 * day)
+	assertSequence(t, pickSequence(t, &SoonestResetSelector{}, 4,
+		claudeAuthResettingAt("a", reset),
+		codexWeeklyAuth("b", 50, reset.Add(10*time.Minute)),
+		claudeAuthResettingAt("c", reset.Add(20*time.Minute)),
+	), "a", "c", "a", "c")
+}
+
+func TestSoonestResetSelector_AffinityKeepsSessionWhileNewSessionsRotate(t *testing.T) {
+	reset := time.Now().Add(2 * day)
+	manager := newSoonestResetManager(t, nil,
+		codexWeeklyAuth("soonest-rotate-a", 50, reset),
+		codexWeeklyAuth("soonest-rotate-b", 50, reset.Add(10*time.Minute)),
+		codexWeeklyAuth("soonest-rotate-c", 50, reset.Add(20*time.Minute)),
+	)
+	first := pickSession(t, manager, "first")
+	seen := map[string]bool{first: true}
+	for _, session := range []string{"second", "third"} {
+		seen[pickSession(t, manager, session)] = true
+		if got := pickSession(t, manager, "first"); got != first {
+			t.Fatalf("bound session = %q, want %q", got, first)
+		}
+	}
+	if len(seen) != 3 {
+		t.Fatalf("new sessions picked %v, want three accounts", seen)
 	}
 }
