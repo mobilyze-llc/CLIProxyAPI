@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -14,6 +16,7 @@ const (
 	// weeklyWindowMinutes is the length of the weekly quota window advertised by Codex.
 	weeklyWindowMinutes = 7 * 24 * 60
 	week                = 7 * 24 * time.Hour
+	resetGroupTolerance = time.Hour
 )
 
 // unknownResetLast orders a credential after every credential with a known reset.
@@ -31,9 +34,16 @@ var unknownResetLast = time.Unix(1<<62, 0)
 // An unknown Claude weekly reset sorts first: the window runs on a fixed per-account
 // schedule, so one request learns it. A passed Claude reset rolls forward by whole weeks.
 // An unknown or passed Codex weekly reset sorts last: that window is usually unstarted and
-// starting it early can waste it. Ties keep input order (ID order), so providers without
-// quota signals behave like fill-first.
-type SoonestResetSelector struct{}
+// starting it early can waste it. Unknown resets keep input order (ID order), so providers
+// without quota signals behave like fill-first.
+//
+// When the soonest credential is not skipped and its weekly reset is known, new picks rotate
+// in ID order through the credentials of its provider that are not skipped and whose known
+// weekly reset is at most one hour after it. Use it by pointer: it holds the rotation cursor.
+type SoonestResetSelector struct {
+	mu      sync.Mutex
+	cursors map[string]int
+}
 
 // Pick selects the available auth whose weekly quota window resets soonest.
 func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
@@ -53,7 +63,29 @@ func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string,
 			picked, pickedGated, pickedReset = auth, gated, resetAt
 		}
 	}
-	return picked, nil
+	if picked == nil || pickedGated || pickedReset.IsZero() || pickedReset.Equal(unknownResetLast) {
+		return picked, nil
+	}
+	groupProvider := strings.ToLower(strings.TrimSpace(picked.Provider))
+	var group []*Auth
+	for _, auth := range available {
+		if !strings.EqualFold(strings.TrimSpace(auth.Provider), groupProvider) {
+			continue
+		}
+		gated, resetAt := soonestResetRank(auth, now)
+		if !gated && resetAt.Sub(pickedReset) <= resetGroupTolerance {
+			group = append(group, auth)
+		}
+	}
+	slices.SortFunc(group, func(a, b *Auth) int { return strings.Compare(a.ID, b.ID) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cursors == nil {
+		s.cursors = make(map[string]int)
+	}
+	cursor := s.cursors[groupProvider]
+	s.cursors[groupProvider] = cursor + 1
+	return group[cursor%len(group)], nil
 }
 
 // soonestResetRank reports whether an observed window of auth is exhausted until a future
