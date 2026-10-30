@@ -151,6 +151,12 @@ func TestDetectClaudeCodeRequestClassifiesEntrypoints(t *testing.T) {
 		{name: "remote", userAgent: "claude-cli/2.1.280 (external, remote)", entrypoint: "remote", subclient: "claude-remote"},
 		{name: "github-action", userAgent: "claude-cli/2.1.280 (external, claude-code-github-action)", entrypoint: "claude-code-github-action", subclient: "claude-code-gh-action"},
 		{name: "unknown", userAgent: "claude-cli/2.1.280 (external, copied-client)", entrypoint: "copied-client"},
+		{name: "sdk-ts-workload", userAgent: "claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, workload/cron)", entrypoint: "sdk-ts", subclient: "claude-code-sdk-ts", agentSDKVersion: "0.3.276", native: true},
+		{name: "cli-workload", userAgent: "claude-cli/2.1.312 (external, cli, workload/cron)", entrypoint: "cli", subclient: "claude-code-cli", native: true},
+		{name: "vscode-agent-sdk-workload", userAgent: "claude-cli/2.1.280 (external, claude-vscode, agent-sdk/0.3.220, workload/cron)", entrypoint: "claude-vscode", subclient: "claude-code-vscode", agentSDKVersion: "0.3.220", native: true},
+		{name: "sdk-cli-daemon-workload-tag", userAgent: "claude-cli/2.1.312 (external, sdk-cli, workload/nightly_sync-2)", entrypoint: "sdk-cli", subclient: "claude-code-cli-sdk", native: true},
+		{name: "sdk-py-workload", userAgent: "claude-cli/2.1.312 (external, sdk-py, agent-sdk/0.1.0, workload/cron)", entrypoint: "sdk-py", subclient: "claude-code-sdk-py", agentSDKVersion: "0.1.0"},
+		{name: "desktop-workload", userAgent: "claude-cli/2.1.312 (external, claude-desktop, workload/cron)", entrypoint: "claude-desktop", subclient: "claude-desktop"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			headers := confirmedClaudeCodeHeaders()
@@ -170,17 +176,24 @@ func TestDetectClaudeCodeRequestClassifiesEntrypoints(t *testing.T) {
 }
 
 func TestDetectClaudeCodeCountTokensAllowsMissingMetadata(t *testing.T) {
-	headers := confirmedClaudeCodeHeaders()
-	headers.Set("User-Agent", "claude-cli/2.1.280 (external, claude-vscode, agent-sdk/0.3.220)")
-	detection := DetectClaudeCodeRequest(headers, []byte(`{"messages":[]}`), true)
-	if !detection.Confirmed {
-		t.Fatalf("detection = %#v, want confirmed", detection)
-	}
-	if detection.MetadataUserID {
-		t.Fatalf("metadata signal = true, want false: %#v", detection)
-	}
-	if detection.Subclient != "claude-code-vscode" || detection.AgentSDKVersion != "0.3.220" {
-		t.Fatalf("count_tokens identity = %#v, want VSCode Agent SDK", detection)
+	for _, userAgent := range []string{
+		"claude-cli/2.1.280 (external, claude-vscode, agent-sdk/0.3.220)",
+		"claude-cli/2.1.280 (external, claude-vscode, agent-sdk/0.3.220, workload/cron)",
+	} {
+		t.Run(userAgent, func(t *testing.T) {
+			headers := confirmedClaudeCodeHeaders()
+			headers.Set("User-Agent", userAgent)
+			detection := DetectClaudeCodeRequest(headers, []byte(`{"messages":[]}`), true)
+			if !detection.Confirmed {
+				t.Fatalf("detection = %#v, want confirmed", detection)
+			}
+			if detection.MetadataUserID {
+				t.Fatalf("metadata signal = true, want false: %#v", detection)
+			}
+			if detection.Subclient != "claude-code-vscode" || detection.AgentSDKVersion != "0.3.220" {
+				t.Fatalf("count_tokens identity = %#v, want VSCode Agent SDK", detection)
+			}
+		})
 	}
 }
 
@@ -398,6 +411,12 @@ func TestDetectClaudeCodeRequestRejectsNearMissHaikuHelpers(t *testing.T) {
 	}
 }
 
+func workloadUserAgentHeaders(userAgent string) http.Header {
+	headers := confirmedClaudeCodeHeaders()
+	headers.Set("User-Agent", userAgent)
+	return headers
+}
+
 func TestDetectClaudeCodeRequestRejectsMalformedNativeSignals(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -413,6 +432,14 @@ func TestDetectClaudeCodeRequestRejectsMalformedNativeSignals(t *testing.T) {
 		{name: "unmeasured next-minor user agent", headers: http.Header{"User-Agent": {"claude-cli/2.2.0 (external, cli)"}, "X-App": {"cli"}, "Anthropic-Beta": {"claude-code-20250219"}}, userID: validClaudeCodeMetadataUserID},
 		{name: "implausible future user agent", headers: http.Header{"User-Agent": {"claude-cli/999.0.0 (external, cli)"}, "X-App": {"cli"}, "Anthropic-Beta": {"claude-code-20250219"}}, userID: validClaudeCodeMetadataUserID},
 		{name: "unrelated beta", headers: http.Header{"User-Agent": {"claude-cli/2.1.280 (external, cli)"}, "X-App": {"cli"}, "Anthropic-Beta": {"anything"}}, userID: validClaudeCodeMetadataUserID},
+		{name: "empty workload tag", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, workload/)"), userID: validClaudeCodeMetadataUserID},
+		{name: "workload before agent sdk", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, workload/cron, agent-sdk/0.3.276)"), userID: validClaudeCodeMetadataUserID},
+		{name: "duplicate workload", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, workload/cron, workload/cron)"), userID: validClaudeCodeMetadataUserID},
+		{name: "workload tag with trailing text", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, workload/cron extra)"), userID: validClaudeCodeMetadataUserID},
+		{name: "workload tag with punctuation", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, workload/cron.v2)"), userID: validClaudeCodeMetadataUserID},
+		{name: "unknown trailing segment", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, foo/bar)"), userID: validClaudeCodeMetadataUserID},
+		{name: "client app segment", headers: workloadUserAgentHeaders("claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, client-app/t3, workload/cron)"), userID: validClaudeCodeMetadataUserID},
+		{name: "older patch with workload", headers: workloadUserAgentHeaders("claude-cli/2.1.257 (external, sdk-ts, agent-sdk/0.3.276, workload/cron)"), userID: validClaudeCodeMetadataUserID},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
