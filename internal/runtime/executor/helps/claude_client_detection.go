@@ -38,6 +38,7 @@ var claudeCodeSubclientByEntrypoint = map[string]string{
 	"bench":                     "claude-code-bench",
 	"sdk-cli":                   "claude-code-cli-sdk",
 	"sdk-ts":                    "claude-code-sdk-ts",
+	"t3-code":                   "t3-code",
 	"sdk-py":                    "claude-code-sdk-py",
 	"claude-vscode":             "claude-code-vscode",
 	"claude-code-github-action": "claude-code-gh-action",
@@ -67,6 +68,7 @@ var nativeClaudeEntrypoints = map[string]bool{
 	"cli":           true,
 	"sdk-cli":       true,
 	"sdk-ts":        true,
+	"t3-code":       true,
 	"claude-vscode": true,
 }
 
