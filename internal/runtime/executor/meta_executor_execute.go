@@ -73,7 +73,7 @@ func (e *MetaExecutor) prepareResponsesRequest(ctx context.Context, auth *clipro
 		return nil, errNormalizePatch
 	}
 	body = normalizeCodexInstructions(body)
-	baseURL, _ := metaCreds(auth)
+	baseURL, _ := helps.MetaCreds(auth)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContentForMetaBaseURL(ctx, "meta executor", body, baseURL)
 	body = helps.SanitizeMetaWebSearchTools(body)
 	body = helps.NormalizeCodexToolIntegerTypes(body, opts.Headers)
@@ -116,7 +116,7 @@ func (e *MetaExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	defer reporter.TrackFailure(ctx, &err)
 	reporter.SetTranslatedReasoningEffort(prepared.body, prepared.to.String())
 
-	baseURL, token := metaCreds(enriched)
+	baseURL, token := helps.MetaCreds(enriched)
 	if strings.TrimSpace(baseURL) == "" {
 		return resp, statusErr{code: http.StatusUnauthorized, msg: "meta executor: missing provider baseURL"}
 	}

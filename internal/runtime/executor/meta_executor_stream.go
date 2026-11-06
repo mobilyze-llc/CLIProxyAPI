@@ -42,7 +42,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	defer reporter.TrackFailure(ctx, &err)
 	reporter.SetTranslatedReasoningEffort(prepared.body, prepared.to.String())
 
-	baseURL, token := metaCreds(enriched)
+	baseURL, token := helps.MetaCreds(enriched)
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "meta executor: missing provider baseURL"}
 	}

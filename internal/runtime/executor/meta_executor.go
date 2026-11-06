@@ -46,7 +46,7 @@ func (e *MetaExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Auth
 	if req == nil {
 		return nil
 	}
-	_, token := metaCreds(auth)
+	_, token := helps.MetaCreds(auth)
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
@@ -95,7 +95,7 @@ func (e *MetaExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 
 	dcaToken := extractDCAToken(auth)
 	if dcaToken == "" {
-		if _, token := metaCreds(auth); token != "" {
+		if _, token := helps.MetaCreds(auth); token != "" {
 			return auth, nil
 		}
 		return nil, statusErr{
@@ -117,7 +117,7 @@ func (e *MetaExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 		return nil, fmt.Errorf("meta executor: mint API key returned empty key")
 	}
 
-	baseURL, _ := metaCreds(auth)
+	baseURL, _ := helps.MetaCreds(auth)
 	if mintedURL := strings.TrimSpace(minted.BaseURL); mintedURL != "" {
 		baseURL = mintedURL
 	}
@@ -188,7 +188,7 @@ func (e *MetaExecutor) ShouldPrepareRequestAuth(auth *cliproxyauth.Auth) bool {
 	if auth == nil || cliproxyauth.IsConfigAPIKeyAuth(auth) {
 		return false
 	}
-	_, token := metaCreds(auth)
+	_, token := helps.MetaCreds(auth)
 	return token == "" && extractDCAToken(auth) != ""
 }
 
@@ -209,7 +209,7 @@ func (e *MetaExecutor) ensureAuth(ctx context.Context, auth *cliproxyauth.Auth) 
 		}
 	}
 
-	_, token := metaCreds(auth)
+	_, token := helps.MetaCreds(auth)
 	if token == "" {
 		if dcaToken := extractDCAToken(auth); dcaToken != "" {
 			refreshed, err := e.Refresh(ctx, auth)
@@ -217,7 +217,7 @@ func (e *MetaExecutor) ensureAuth(ctx context.Context, auth *cliproxyauth.Auth) 
 				return nil, err
 			}
 			auth = refreshed
-			_, token = metaCreds(auth)
+			_, token = helps.MetaCreds(auth)
 		}
 	}
 
@@ -238,7 +238,7 @@ func (e *MetaExecutor) ensureAuth(ctx context.Context, auth *cliproxyauth.Auth) 
 }
 
 func (e *MetaExecutor) enrichAuth(auth *cliproxyauth.Auth) *cliproxyauth.Auth {
-	baseURL, token := metaCreds(auth)
+	baseURL, token := helps.MetaCreds(auth)
 	var cloned *cliproxyauth.Auth
 	if auth != nil {
 		cloned = auth.Clone()
@@ -293,53 +293,6 @@ func extractDCAToken(a *cliproxyauth.Auth) string {
 		}
 	}
 	return ""
-}
-
-func metaCreds(a *cliproxyauth.Auth) (baseURL, token string) {
-	baseURL = metaauth.DefaultAPIBaseURL
-	if a == nil {
-		return baseURL, ""
-	}
-
-	if a.Attributes != nil {
-		if b := strings.TrimSpace(a.Attributes["base_url"]); b != "" {
-			baseURL = b
-		}
-		if k := strings.TrimSpace(a.Attributes["api_key"]); k != "" && !strings.HasPrefix(k, "dca:") {
-			token = k
-		} else if t := strings.TrimSpace(a.Attributes["access_token"]); t != "" && !strings.HasPrefix(t, "dca:") {
-			token = t
-		}
-	}
-	if a.Metadata != nil {
-		if baseURL == metaauth.DefaultAPIBaseURL {
-			if b, ok := a.Metadata["base_url"].(string); ok && strings.TrimSpace(b) != "" {
-				baseURL = strings.TrimSpace(b)
-			} else if b, ok := a.Metadata["api_base_url"].(string); ok && strings.TrimSpace(b) != "" {
-				baseURL = strings.TrimSpace(b)
-			}
-		}
-		if token == "" {
-			if k, ok := a.Metadata["api_key"].(string); ok && strings.TrimSpace(k) != "" && !strings.HasPrefix(strings.TrimSpace(k), "dca:") {
-				token = strings.TrimSpace(k)
-			} else if t, ok := a.Metadata["access_token"].(string); ok && strings.TrimSpace(t) != "" && !strings.HasPrefix(strings.TrimSpace(t), "dca:") {
-				token = strings.TrimSpace(t)
-			}
-		}
-	}
-	if token == "" && a.Storage != nil {
-		if ms, ok := a.Storage.(*metaauth.MetaTokenStorage); ok && ms != nil {
-			if ms.APIKey != "" {
-				token = ms.APIKey
-			} else if ms.AccessToken != "" && !strings.HasPrefix(ms.AccessToken, "dca:") {
-				token = ms.AccessToken
-			}
-			if ms.BaseURL != "" && baseURL == metaauth.DefaultAPIBaseURL {
-				baseURL = ms.BaseURL
-			}
-		}
-	}
-	return baseURL, token
 }
 
 func parseMetaRetryAfter(statusCode int, errorBody []byte, now time.Time) *time.Duration {
