@@ -20,6 +20,7 @@ import (
 	metaauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/meta"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	_ "github.com/router-for-me/CLIProxyAPI/v8/internal/translator"
 	sdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -46,7 +47,7 @@ func TestMetaExecutor_MetaCredsResolution(t *testing.T) {
 				"base_url": "https://custom.meta.com/v1",
 			},
 		}
-		baseURL, token := metaCreds(auth)
+		baseURL, token := helps.MetaCreds(auth)
 		if baseURL != "https://custom.meta.com/v1" || token != "attr-key" {
 			t.Errorf("unexpected creds: base=%s, token=%s", baseURL, token)
 		}
@@ -58,7 +59,7 @@ func TestMetaExecutor_MetaCredsResolution(t *testing.T) {
 				"access_token": "meta-oauth-token",
 			},
 		}
-		baseURL, token := metaCreds(auth)
+		baseURL, token := helps.MetaCreds(auth)
 		if baseURL != "https://api.meta.ai/v1" || token != "meta-oauth-token" {
 			t.Errorf("unexpected creds: base=%s, token=%s", baseURL, token)
 		}
@@ -73,7 +74,7 @@ func TestMetaExecutor_MetaCredsResolution(t *testing.T) {
 		t.Setenv("MUSE_AUTH_PATH", authPath)
 
 		// nil auth should NOT bleed to env or local file
-		baseURL, token := metaCreds(nil)
+		baseURL, token := helps.MetaCreds(nil)
 		if token != "" {
 			t.Errorf("expected empty token for nil auth, got %s", token)
 		}
@@ -83,7 +84,7 @@ func TestMetaExecutor_MetaCredsResolution(t *testing.T) {
 
 		// empty auth should NOT bleed to env or local file
 		emptyAuth := &cliproxyauth.Auth{}
-		_, token = metaCreds(emptyAuth)
+		_, token = helps.MetaCreds(emptyAuth)
 		if token != "" {
 			t.Errorf("expected empty token for empty auth, got %s", token)
 		}
@@ -552,7 +553,7 @@ func TestMetaExecutorRefreshUsesMintedBaseURL(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, _ := metaCreds(updated); got != tc.want {
+			if got, _ := helps.MetaCreds(updated); got != tc.want {
 				t.Errorf("request base URL = %q, want %q", got, tc.want)
 			}
 			if updated.Metadata["base_url"] != tc.want {

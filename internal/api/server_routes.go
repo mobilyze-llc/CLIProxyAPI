@@ -126,6 +126,8 @@ func (s *Server) setupRoutes() {
 		codexDirect.POST("/alpha/search", s.codexAlphaSearch)
 	}
 
+	s.engine.GET(museCodeModelsPath, AuthMiddleware(s.accessManager), s.museCodeModels)
+
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
