@@ -620,8 +620,8 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 
 // ReleaseCredentialQuota ends an active credential-wide quota cooldown on a Claude credential
 // early when a usage read proves the shared windows available. read is the auth snapshot
-// taken before the read started; any change to the credential since then, such as a new
-// failure or a re-registration, refuses the release. Disabled credentials, auth and grant
+// taken before the read started; a later Generation or RegistrationEpoch change, such as
+// a new failure or re-registration, refuses the release. Disabled credentials, auth and grant
 // failures, and each model's independent cooldowns stay. It reports whether it released.
 func (m *Manager) ReleaseCredentialQuota(read *Auth, usage QuotaUsage) bool {
 	if m == nil || read == nil || read.Provider != "claude" || !usage.CredentialQuotaAvailable {

@@ -86,11 +86,6 @@ func ParseClaudeUsageHeaders(body []byte) http.Header {
 	return headers
 }
 
-// ClaudeUsageCredentialQuotaAvailable reports whether an /api/oauth/usage response proves
-// that neither shared subscription window is exhausted. Both five_hour and seven_day must be
-// present; each must be an explicit null (no window running) or an object whose utilization
-// is a finite number in [0, 100) and whose resets_at is an RFC 3339 time after readStartedAt.
-// At least one window must be an object. Any other shape is no proof.
 func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) bool {
 	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
 		return false
@@ -98,7 +93,8 @@ func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) b
 	active := false
 	for _, path := range []string{"five_hour", "seven_day"} {
 		window := gjson.GetBytes(body, path)
-		if window.Type == gjson.Null && window.Exists() {
+		idle := window.Type == gjson.Null && window.Exists()
+		if idle {
 			continue
 		}
 		if !window.IsObject() {
