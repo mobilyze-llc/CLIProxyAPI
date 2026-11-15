@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -83,4 +84,43 @@ func ParseClaudeUsageHeaders(body []byte) http.Header {
 		return nil
 	}
 	return headers
+}
+
+// ClaudeUsageCredentialQuotaAvailable reports whether an /api/oauth/usage response proves
+// that neither shared subscription window is exhausted. Both five_hour and seven_day must be
+// present; each must be an explicit null (no window running) or an object whose utilization
+// is a finite number in [0, 100) and whose resets_at is an RFC 3339 time after readStartedAt.
+// At least one window must be an object. Any other shape is no proof.
+func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) bool {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return false
+	}
+	active := false
+	for _, path := range []string{"five_hour", "seven_day"} {
+		window := gjson.GetBytes(body, path)
+		if window.Type == gjson.Null && window.Exists() {
+			continue
+		}
+		if !window.IsObject() {
+			return false
+		}
+		utilization := window.Get("utilization")
+		if utilization.Type != gjson.Number {
+			return false
+		}
+		percent := utilization.Float()
+		if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent >= 100 {
+			return false
+		}
+		resetAt := window.Get("resets_at")
+		if resetAt.Type != gjson.String {
+			return false
+		}
+		reset, errParse := time.Parse(time.RFC3339, resetAt.Str)
+		if errParse != nil || !reset.After(readStartedAt) {
+			return false
+		}
+		active = true
+	}
+	return active
 }

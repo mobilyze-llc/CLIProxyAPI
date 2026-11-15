@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // Recorded usage responses with identities removed.
@@ -61,5 +62,50 @@ func TestParseClaudeUsageHeadersMapsRecordedResponse(t *testing.T) {
 func TestParseClaudeUsageHeadersWithoutWindowReturnsNil(t *testing.T) {
 	if got := ParseClaudeUsageHeaders([]byte(`{"five_hour":null,"seven_day":null}`)); got != nil {
 		t.Fatalf("ParseClaudeUsageHeaders() = %v, want nil", got)
+	}
+}
+
+func TestClaudeUsageCredentialQuotaAvailable(t *testing.T) {
+	readStartedAt := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	window := func(utilization, resetsAt string) string {
+		return `{"utilization":` + utilization + `,"resets_at":` + resetsAt + `}`
+	}
+	future := `"2026-10-08T23:00:00.347435+00:00"`
+	low := window("5.0", future)
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"recorded", recordedClaudeUsage, true},
+		{"live five hour idle", `{"five_hour":null,"seven_day":` + low + `,"seven_day_opus":null,"extra_usage":{},"limits":[]}`, true},
+		{"seven day idle", `{"five_hour":` + low + `,"seven_day":null}`, true},
+		{"zero usage", `{"five_hour":null,"seven_day":` + window("0", future) + `}`, true},
+		{"both idle", `{"five_hour":null,"seven_day":null}`, false},
+		{"five hour missing", `{"seven_day":` + low + `}`, false},
+		{"seven day missing", `{"five_hour":null}`, false},
+		{"empty window", `{"five_hour":{},"seven_day":` + low + `}`, false},
+		{"hollow window", `{"five_hour":` + window("null", "null") + `,"seven_day":` + low + `}`, false},
+		{"string window", `{"five_hour":"idle","seven_day":` + low + `}`, false},
+		{"string utilization", `{"five_hour":null,"seven_day":` + window(`"5"`, future) + `}`, false},
+		{"negative utilization", `{"five_hour":null,"seven_day":` + window("-1", future) + `}`, false},
+		{"exhausted", `{"five_hour":null,"seven_day":` + window("100", future) + `}`, false},
+		{"over limit", `{"five_hour":` + window("100.5", future) + `,"seven_day":` + low + `}`, false},
+		{"infinite utilization", `{"five_hour":null,"seven_day":` + window("1e400", future) + `}`, false},
+		{"missing reset", `{"five_hour":null,"seven_day":{"utilization":5}}`, false},
+		{"bad reset", `{"five_hour":null,"seven_day":` + window("5", `"next week"`) + `}`, false},
+		{"numeric reset", `{"five_hour":null,"seven_day":` + window("5", "1791500000") + `}`, false},
+		{"reset before read", `{"five_hour":null,"seven_day":` + window("5", `"2026-09-30T23:00:00Z"`) + `}`, false},
+		{"reset at read", `{"five_hour":null,"seven_day":` + window("5", `"2026-10-01T00:00:00Z"`) + `}`, false},
+		{"array", `[]`, false},
+		{"empty", ``, false},
+		{"not json", `rate limited`, false},
+		{"truncated", `{"five_hour":null,"seven_day":` + low, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClaudeUsageCredentialQuotaAvailable([]byte(tc.body), readStartedAt); got != tc.want {
+				t.Fatalf("ClaudeUsageCredentialQuotaAvailable(%s) = %v, want %v", tc.body, got, tc.want)
+			}
+		})
 	}
 }
