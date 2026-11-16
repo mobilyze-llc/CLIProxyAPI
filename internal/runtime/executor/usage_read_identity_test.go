@@ -25,7 +25,7 @@ type usageReadCapture struct {
 	header http.Header
 }
 
-type quotaUsageReadFunc func(context.Context, *cliproxyauth.Auth) (http.Header, error)
+type quotaUsageReadFunc func(context.Context, *cliproxyauth.Auth) (cliproxyauth.QuotaUsage, error)
 
 // captureUsageRead runs one usage read and returns what the transport received. The
 // injected round tripper answers every request, so the read cannot reach a real endpoint.
@@ -187,12 +187,12 @@ func TestClaudeUsageReadDecodesCompressedResponse(t *testing.T) {
 			Header: http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {"gzip"}},
 			Body:   io.NopCloser(bytes.NewReader(compressed.Bytes()))}, nil
 	}))
-	headers, errRead := NewClaudeExecutor(&config.Config{}).ReadQuotaUsage(ctx, usageReadOAuthAuth("claude", nil))
+	usage, errRead := NewClaudeExecutor(&config.Config{}).ReadQuotaUsage(ctx, usageReadOAuthAuth("claude", nil))
 	if errRead != nil {
 		t.Fatalf("usage read: %v", errRead)
 	}
-	if got := headers.Get("Anthropic-Ratelimit-Unified-7d-Utilization"); got != "0.31" {
-		t.Fatalf("parsed 7d utilization = %q, want 0.31 (headers %v)", got, headers)
+	if got := usage.Headers.Get("Anthropic-Ratelimit-Unified-7d-Utilization"); got != "0.31" {
+		t.Fatalf("parsed 7d utilization = %q, want 0.31 (headers %v)", got, usage.Headers)
 	}
 }
 

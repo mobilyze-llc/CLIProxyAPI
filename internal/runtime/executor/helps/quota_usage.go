@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -83,4 +84,39 @@ func ParseClaudeUsageHeaders(body []byte) http.Header {
 		return nil
 	}
 	return headers
+}
+
+func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) bool {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return false
+	}
+	active := false
+	for _, path := range []string{"five_hour", "seven_day"} {
+		window := gjson.GetBytes(body, path)
+		idle := window.Type == gjson.Null && window.Exists()
+		if idle {
+			continue
+		}
+		if !window.IsObject() {
+			return false
+		}
+		utilization := window.Get("utilization")
+		if utilization.Type != gjson.Number {
+			return false
+		}
+		percent := utilization.Float()
+		if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent >= 100 {
+			return false
+		}
+		resetAt := window.Get("resets_at")
+		if resetAt.Type != gjson.String {
+			return false
+		}
+		reset, errParse := time.Parse(time.RFC3339, resetAt.Str)
+		if errParse != nil || !reset.After(readStartedAt) {
+			return false
+		}
+		active = true
+	}
+	return active
 }

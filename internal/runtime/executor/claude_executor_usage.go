@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"net/http"
+	"time"
 
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -13,13 +14,17 @@ var _ cliproxyauth.QuotaUsageReader = (*ClaudeExecutor)(nil)
 
 // ReadQuotaUsage reads the credential's subscription usage the way Claude Code does:
 // through the OAuth control-plane transport with the configured Claude Code User-Agent.
-func (e *ClaudeExecutor) ReadQuotaUsage(ctx context.Context, auth *cliproxyauth.Auth) (http.Header, error) {
+func (e *ClaudeExecutor) ReadQuotaUsage(ctx context.Context, auth *cliproxyauth.Auth) (cliproxyauth.QuotaUsage, error) {
 	accessToken, _ := claudeCreds(auth)
+	readStartedAt := time.Now()
 	body, errFetch := e.claudeOAuthUsageService(ctx, auth).FetchOAuthUsage(ctx, accessToken, helps.ClaudeUsageUserAgent(e.cfg))
 	if errFetch != nil {
-		return nil, errFetch
+		return cliproxyauth.QuotaUsage{}, errFetch
 	}
-	return helps.ParseClaudeUsageHeaders(body), nil
+	return cliproxyauth.QuotaUsage{
+		Headers:                  helps.ParseClaudeUsageHeaders(body),
+		CredentialQuotaAvailable: helps.ClaudeUsageCredentialQuotaAvailable(body, readStartedAt),
+	}, nil
 }
 
 // claudeOAuthUsageService resolves the proxy the way helps.NewUtlsHTTPClient does: the

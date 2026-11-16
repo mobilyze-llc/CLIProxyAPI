@@ -609,7 +609,50 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		}
 	}()
 
-	supportedModels, regEpoch := registry.GetGlobalRegistry().GetModelsAndEpochForClient(authID)
+	if snapshot != nil {
+		m.publishAuthAvailability(snapshot, now)
+	}
+	if errPersist != nil {
+		return nil, nil, errPersist
+	}
+	return snapshot, models, nil
+}
+
+// ReleaseCredentialQuota ends an active credential-wide quota cooldown on a Claude credential
+// early when a usage read proves the shared windows available. read is the auth snapshot
+// taken before the read started; a later Generation or RegistrationEpoch change, such as
+// a new failure or re-registration, refuses the release. Disabled credentials, auth and grant
+// failures, and each model's independent cooldowns stay. It reports whether it released.
+func (m *Manager) ReleaseCredentialQuota(read *Auth, usage QuotaUsage) bool {
+	if m == nil || read == nil || read.Provider != "claude" || !usage.CredentialQuotaAvailable {
+		return false
+	}
+	releaseMutation := m.lockAuthMutation(read.ID)
+	defer releaseMutation()
+	now := time.Now()
+	m.mu.Lock()
+	auth := m.auths[read.ID]
+	if auth == nil || auth.Provider != "claude" || auth.Generation != read.Generation ||
+		auth.RegistrationEpoch != read.RegistrationEpoch || auth.Disabled || auth.Status == StatusDisabled ||
+		!auth.Quota.Exceeded || auth.Quota.Reason != "credential_quota" || !auth.Quota.NextRecoverAt.After(now) ||
+		hasUnauthorizedAuthFailure(auth) ||
+		(auth.LastError != nil && (isUnauthorizedError(auth.LastError) || isInvalidGrantResultError(auth.LastError))) {
+		m.mu.Unlock()
+		return false
+	}
+	releaseCredentialQuota(auth, now)
+	auth.Generation++
+	auth.UpdatedAt = now
+	snapshot := auth.Clone()
+	m.mu.Unlock()
+	releaseMutation()
+	m.publishAuthAvailability(snapshot, now)
+	m.persistCooldownStates(context.Background())
+	return true
+}
+
+func (m *Manager) publishAuthAvailability(snapshot *Auth, now time.Time) {
+	supportedModels, regEpoch := registry.GetGlobalRegistry().GetModelsAndEpochForClient(snapshot.ID)
 	projections := make([]registry.ClientModelProjection, 0, len(supportedModels))
 	for _, sm := range supportedModels {
 		if sm == nil || strings.TrimSpace(sm.ID) == "" {
@@ -617,16 +660,10 @@ func (m *Manager) ResetQuota(ctx context.Context, authID string) (*Auth, []strin
 		}
 		projections = append(projections, m.clientModelProjectionForAuth(snapshot, sm.ID, now))
 	}
-	if snapshot != nil {
-		registry.GetGlobalRegistry().ApplyClientModelProjections(authID, regEpoch, snapshot.Generation, projections)
-	}
-	if m.scheduler != nil && snapshot != nil {
+	registry.GetGlobalRegistry().ApplyClientModelProjections(snapshot.ID, regEpoch, snapshot.Generation, projections)
+	if m.scheduler != nil {
 		m.scheduler.upsertAuth(snapshot)
 	}
-	if errPersist != nil {
-		return nil, nil, errPersist
-	}
-	return snapshot, models, nil
 }
 
 func modelsForRegisteredAuth(authID string) []string {

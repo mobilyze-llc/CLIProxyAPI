@@ -62,10 +62,11 @@ func (s *Service) readQuotaUsage(ctx context.Context, authID string) {
 	}
 	readCtx, cancel := context.WithTimeout(ctx, quotaUsageReadTimeout)
 	defer cancel()
-	observed, errRead := reader.ReadQuotaUsage(readCtx, auth)
+	usage, errRead := reader.ReadQuotaUsage(readCtx, auth)
 	if errRead != nil {
 		log.Warnf("quota usage read failed for auth %s: %v", authID, errRead)
 		return
 	}
-	s.coreManager.ObserveQuotaHeaders(authID, observed)
+	s.coreManager.ObserveQuotaHeaders(authID, usage.Headers)
+	s.coreManager.ReleaseCredentialQuota(auth, usage)
 }
