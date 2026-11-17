@@ -15,6 +15,11 @@ import (
 //go:embed models/codex_client_models.json
 var embeddedCodexClientModelsJSON []byte
 
+//go:embed models/codex_client_model_fallbacks.json
+var embeddedCodexClientModelFallbacksJSON []byte
+
+var codexClientModelFallbacks = parseCodexClientModelFallbacks(embeddedCodexClientModelFallbacksJSON)
+
 type codexClientModelsPayload struct {
 	Models []map[string]any `json:"models"`
 }
@@ -59,7 +64,12 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 		return false, fmt.Errorf("%s: %w", source, err)
 	}
 
-	cloned := append([]byte(nil), data...)
+	merged, err := withCodexClientModelFallbacks(data)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", source, err)
+	}
+
+	cloned := append([]byte(nil), merged...)
 	codexClientCatalogStore.mu.Lock()
 	defer codexClientCatalogStore.mu.Unlock()
 	if bytes.Equal(codexClientCatalogStore.data, cloned) {
@@ -68,6 +78,62 @@ func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
 	codexClientCatalogStore.data = cloned
 	codexClientCatalogStore.revision++
 	return true, nil
+}
+
+func parseCodexClientModelFallbacks(data []byte) []json.RawMessage {
+	var models []json.RawMessage
+	if err := json.Unmarshal(data, &models); err != nil {
+		log.Warnf("registry: failed to parse embedded codex_client_model_fallbacks.json: %v", err)
+		return nil
+	}
+	wrapped, err := json.Marshal(map[string]any{"models": models})
+	if err == nil {
+		err = ValidateCodexClientModelsJSON(wrapped)
+	}
+	if err != nil {
+		log.Warnf("registry: invalid embedded codex_client_model_fallbacks.json: %v", err)
+		return nil
+	}
+	return models
+}
+
+func withCodexClientModelFallbacks(data []byte) ([]byte, error) {
+	var catalog map[string]json.RawMessage
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return nil, fmt.Errorf("decode Codex client model catalog: %w", err)
+	}
+	var models []json.RawMessage
+	if err := json.Unmarshal(catalog["models"], &models); err != nil {
+		return nil, fmt.Errorf("decode Codex client model catalog models: %w", err)
+	}
+	present := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		present[codexClientModelSlug(model)] = struct{}{}
+	}
+	added := false
+	for _, fallback := range codexClientModelFallbacks {
+		if _, exists := present[codexClientModelSlug(fallback)]; !exists {
+			models = append(models, fallback)
+			added = true
+		}
+	}
+	if !added {
+		return data, nil
+	}
+	encodedModels, err := json.Marshal(models)
+	if err != nil {
+		return nil, fmt.Errorf("encode Codex client model catalog models: %w", err)
+	}
+	catalog["models"] = encodedModels
+	return json.Marshal(catalog)
+}
+
+func codexClientModelSlug(model json.RawMessage) string {
+	var entry struct {
+		Slug string `json:"slug"`
+	}
+	_ = json.Unmarshal(model, &entry)
+	return strings.TrimSpace(entry.Slug)
 }
 
 // ValidateCodexClientModelsJSON validates the fields required to serve a

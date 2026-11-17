@@ -1689,6 +1689,8 @@ func TestMarshalCompactJSONIsSingleLine(t *testing.T) {
 
 func TestCodexClientModelsResponse_NonTemplateCatalogStaysWithinOneMiB(t *testing.T) {
 	ids := []string{
+		"gpt-6.2-sol",
+		"gpt-6.2-astra",
 		"gpt-6-astra",
 		"gpt-6-sol",
 		"gpt-6-luna",
@@ -1718,22 +1720,29 @@ func TestCodexClientModelsResponse_NonTemplateCatalogStaysWithinOneMiB(t *testin
 	if len(body) >= 1<<20 {
 		t.Fatalf("catalog size = %d bytes, want < 1MiB", len(body))
 	}
+	t.Logf("catalog size = %d bytes", len(body))
 
 	entries, _ := resp["models"].([]map[string]any)
-	var templateModel, customModel map[string]any
+	var templateModel, solModel, astraModel, customModel map[string]any
 	for _, entry := range entries {
 		switch stringModelValue(entry, "slug") {
 		case "gpt-5.5":
 			templateModel = entry
+		case "gpt-6.2-sol":
+			solModel = entry
+		case "gpt-6.2-astra":
+			astraModel = entry
 		case "custom-model-0":
 			customModel = entry
 		}
 	}
-	if templateModel == nil || customModel == nil {
-		t.Fatal("expected both template and custom models")
+	if templateModel == nil || solModel == nil || astraModel == nil || customModel == nil {
+		t.Fatal("expected template and custom models")
 	}
-	if len(stringModelValue(templateModel, "base_instructions")) < 1000 {
-		t.Fatal("expected official template models to keep their full instructions")
+	for _, model := range []map[string]any{templateModel, solModel, astraModel} {
+		if len(stringModelValue(model, "base_instructions")) < 1000 {
+			t.Fatal("expected official template models to keep their full instructions")
+		}
 	}
 	if stringModelValue(customModel, "base_instructions") != codexClientFallbackInstructions {
 		t.Fatalf("custom base_instructions = %q", stringModelValue(customModel, "base_instructions"))
