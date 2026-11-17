@@ -2,6 +2,7 @@ package registry
 
 import (
 	"encoding/json"
+	"os"
 	"slices"
 	"testing"
 )
@@ -82,7 +83,11 @@ func TestCodexPaidModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 		}
 	}
 
-	tiers["team"][len(tiers["team"])-1].ID = "mutated"
+	for _, model := range tiers["team"] {
+		if model.ID == "gpt-6.2-astra" {
+			model.ID = "mutated"
+		}
+	}
 	for _, model := range GetCodexTeamModels() {
 		if model.ID == "mutated" {
 			t.Fatal("caller mutation reached shared fallback models")
@@ -98,8 +103,12 @@ func TestCodexClientModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 		}
 	})
 
+	fallbackData, err := os.ReadFile("models/codex_client_model_fallbacks.json")
+	if err != nil {
+		t.Fatalf("read native fallback fixture: %v", err)
+	}
 	var fallbacks []map[string]any
-	if err := json.Unmarshal(embeddedCodexClientModelFallbacksJSON, &fallbacks); err != nil {
+	if err := json.Unmarshal(fallbackData, &fallbacks); err != nil {
 		t.Fatalf("decode fallbacks: %v", err)
 	}
 	var embedded struct {
