@@ -3,7 +3,11 @@
 package registry
 
 import (
+	_ "embed"
+	"encoding/json"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -66,17 +70,46 @@ func GetCodexFreeModels() []*ModelInfo {
 
 // GetCodexTeamModels returns model definitions for the Codex team plan tier.
 func GetCodexTeamModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexTeam))
+	return WithCodexBuiltins(withCodexPaidModelFallbacks(cloneModelInfos(getModels().CodexTeam)))
 }
 
 // GetCodexPlusModels returns model definitions for the Codex plus plan tier.
 func GetCodexPlusModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPlus))
+	return WithCodexBuiltins(withCodexPaidModelFallbacks(cloneModelInfos(getModels().CodexPlus)))
 }
 
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
-	return WithCodexBuiltins(cloneModelInfos(getModels().CodexPro))
+	return WithCodexBuiltins(withCodexPaidModelFallbacks(cloneModelInfos(getModels().CodexPro)))
+}
+
+//go:embed models/codex_paid_model_fallbacks.json
+var embeddedCodexPaidModelFallbacksJSON []byte
+
+var codexPaidModelFallbacks = parseCodexPaidModelFallbacks(embeddedCodexPaidModelFallbacksJSON)
+
+func parseCodexPaidModelFallbacks(data []byte) []*ModelInfo {
+	var models []*ModelInfo
+	if err := json.Unmarshal(data, &models); err != nil {
+		log.Warnf("registry: failed to parse embedded codex_paid_model_fallbacks.json: %v", err)
+		return nil
+	}
+	return models
+}
+
+func withCodexPaidModelFallbacks(models []*ModelInfo) []*ModelInfo {
+	present := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		if model != nil {
+			present[model.ID] = struct{}{}
+		}
+	}
+	for _, fallback := range codexPaidModelFallbacks {
+		if _, exists := present[fallback.ID]; !exists {
+			models = append(models, cloneModelInfo(fallback))
+		}
+	}
+	return models
 }
 
 // GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
