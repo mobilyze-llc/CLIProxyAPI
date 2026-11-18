@@ -70,41 +70,41 @@ func GetCodexFreeModels() []*ModelInfo {
 
 // GetCodexTeamModels returns model definitions for the Codex team plan tier.
 func GetCodexTeamModels() []*ModelInfo {
-	return WithCodexBuiltins(withCodexPaidModelFallbacks(cloneModelInfos(getModels().CodexTeam)))
+	return WithCodexBuiltins(withModelFallbacks(cloneModelInfos(getModels().CodexTeam), codexPaidModelFallbacks))
 }
 
 // GetCodexPlusModels returns model definitions for the Codex plus plan tier.
 func GetCodexPlusModels() []*ModelInfo {
-	return WithCodexBuiltins(withCodexPaidModelFallbacks(cloneModelInfos(getModels().CodexPlus)))
+	return WithCodexBuiltins(withModelFallbacks(cloneModelInfos(getModels().CodexPlus), codexPaidModelFallbacks))
 }
 
 // GetCodexProModels returns model definitions for the Codex pro plan tier.
 func GetCodexProModels() []*ModelInfo {
-	return WithCodexBuiltins(withCodexPaidModelFallbacks(cloneModelInfos(getModels().CodexPro)))
+	return WithCodexBuiltins(withModelFallbacks(cloneModelInfos(getModels().CodexPro), codexPaidModelFallbacks))
 }
 
 //go:embed models/codex_paid_model_fallbacks.json
 var embeddedCodexPaidModelFallbacksJSON []byte
 
-var codexPaidModelFallbacks = parseCodexPaidModelFallbacks(embeddedCodexPaidModelFallbacksJSON)
+var codexPaidModelFallbacks = parseModelFallbacks("codex_paid_model_fallbacks.json", embeddedCodexPaidModelFallbacksJSON)
 
-func parseCodexPaidModelFallbacks(data []byte) []*ModelInfo {
+func parseModelFallbacks(filename string, data []byte) []*ModelInfo {
 	var models []*ModelInfo
 	if err := json.Unmarshal(data, &models); err != nil {
-		log.Warnf("registry: failed to parse embedded codex_paid_model_fallbacks.json: %v", err)
+		log.Warnf("registry: failed to parse embedded %s: %v", filename, err)
 		return nil
 	}
 	return models
 }
 
-func withCodexPaidModelFallbacks(models []*ModelInfo) []*ModelInfo {
+func withModelFallbacks(models, fallbacks []*ModelInfo) []*ModelInfo {
 	present := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		if model != nil {
 			present[model.ID] = struct{}{}
 		}
 	}
-	for _, fallback := range codexPaidModelFallbacks {
+	for _, fallback := range fallbacks {
 		if _, exists := present[fallback.ID]; !exists {
 			models = append(models, cloneModelInfo(fallback))
 		}
@@ -117,9 +117,14 @@ func GetKimiModels() []*ModelInfo {
 	return cloneModelInfos(getModels().Kimi)
 }
 
+//go:embed models/antigravity_model_fallbacks.json
+var embeddedAntigravityModelFallbacksJSON []byte
+
+var antigravityModelFallbacks = parseModelFallbacks("antigravity_model_fallbacks.json", embeddedAntigravityModelFallbacksJSON)
+
 // GetAntigravityModels returns the standard Antigravity model definitions.
 func GetAntigravityModels() []*ModelInfo {
-	return cloneModelInfos(getModels().Antigravity)
+	return withModelFallbacks(cloneModelInfos(getModels().Antigravity), antigravityModelFallbacks)
 }
 
 var staticDevinModels = []*ModelInfo{

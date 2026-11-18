@@ -1,0 +1,74 @@
+[
+  {
+    "id": "gemini-4-neon-low",
+    "object": "model",
+    "type": "antigravity",
+    "owned_by": "antigravity",
+    "name": "gemini-4-neon-low",
+    "display_name": "Gemini 4 Neon (Low)",
+    "context_length": 1048576,
+    "max_completion_tokens": 262144,
+    "thinking": {
+      "levels": [
+        "low"
+      ]
+    },
+    "supportedInputModalities": [
+      "text",
+      "image",
+      "audio",
+      "video"
+    ],
+    "supportedOutputModalities": [
+      "text"
+    ]
+  },
+  {
+    "id": "gemini-4-neon-medium",
+    "object": "model",
+    "type": "antigravity",
+    "owned_by": "antigravity",
+    "name": "gemini-4-neon-medium",
+    "display_name": "Gemini 4 Neon (Medium)",
+    "context_length": 1048576,
+    "max_completion_tokens": 262144,
+    "thinking": {
+      "levels": [
+        "medium"
+      ]
+    },
+    "supportedInputModalities": [
+      "text",
+      "image",
+      "audio",
+      "video"
+    ],
+    "supportedOutputModalities": [
+      "text"
+    ]
+  },
+  {
+    "id": "gemini-4-neon-high",
+    "object": "model",
+    "type": "antigravity",
+    "owned_by": "antigravity",
+    "name": "gemini-4-neon-high",
+    "display_name": "Gemini 4 Neon (High)",
+    "context_length": 1048576,
+    "max_completion_tokens": 262144,
+    "thinking": {
+      "levels": [
+        "high"
+      ]
+    },
+    "supportedInputModalities": [
+      "text",
+      "image",
+      "audio",
+      "video"
+    ],
+    "supportedOutputModalities": [
+      "text"
+    ]
+  }
+]
