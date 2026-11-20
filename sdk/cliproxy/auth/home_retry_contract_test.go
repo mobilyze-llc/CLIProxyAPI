@@ -1231,7 +1231,7 @@ func TestRetryRoundAvailabilityRejectsStaleQuotaForNonRetryableStatus(t *testing
 					},
 				},
 			}
-			got, next := retryRoundAvailabilityForAuth(auth, "gpt", now)
+			got, next := (&Manager{}).retryRoundAvailabilityForAuth(auth, "gpt", now)
 			if got != test.want {
 				t.Fatalf("retryRoundAvailabilityForAuth() eligible = %t, want %t", got, test.want)
 			}

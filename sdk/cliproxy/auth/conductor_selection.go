@@ -1195,7 +1195,10 @@ func (m *Manager) requestRetryRoundExclusions(retryRound int, defaultRequestRetr
 	return excluded
 }
 
-func retryRoundAvailabilityForAuth(auth *Auth, model string, now time.Time) (bool, time.Time) {
+func (m *Manager) retryRoundAvailabilityForAuth(auth *Auth, model string, now time.Time) (bool, time.Time) {
+	if m.quotaReserveReached(auth, now) {
+		return false, time.Time{}
+	}
 	blocked, reason, next := isAuthBlockedForModel(auth, model, now)
 	if !blocked {
 		return true, time.Time{}
@@ -1295,7 +1298,7 @@ func (m *Manager) closestCooldownWaitWithAttempted(providers []string, model str
 		if strings.TrimSpace(model) != "" {
 			checkModel = m.selectionModelForAuth(auth, model)
 		}
-		retryEligible, next := retryRoundAvailabilityForAuth(auth, checkModel, now)
+		retryEligible, next := m.retryRoundAvailabilityForAuth(auth, checkModel, now)
 		if !retryEligible {
 			continue
 		}
@@ -1387,7 +1390,7 @@ func (m *Manager) retryAllowed(attempt int, providers []string, model string, el
 		if strings.TrimSpace(model) != "" {
 			checkModel = m.selectionModelForAuth(auth, model)
 		}
-		if retryEligible, _ := retryRoundAvailabilityForAuth(auth, checkModel, now); retryEligible {
+		if retryEligible, _ := m.retryRoundAvailabilityForAuth(auth, checkModel, now); retryEligible {
 			return true
 		}
 	}
