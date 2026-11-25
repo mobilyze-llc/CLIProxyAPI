@@ -21,11 +21,13 @@ func TestCodexPaidModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 	}
 	remote["claude"][0]["display_name"] = "Remote Claude"
 	for _, tier := range []string{"codex-free", "codex-team", "codex-plus", "codex-pro"} {
-		for _, model := range remote[tier] {
-			if model["id"] == "gpt-5.5" {
-				model["description"] = "Remote gpt-5.5"
-			}
-		}
+		remote[tier] = slices.DeleteFunc(remote[tier], func(model map[string]any) bool {
+			return model["id"] == "gpt-5.5" || model["id"] == "gpt-6.2-sol" || model["id"] == "gpt-6.2-astra"
+		})
+		remote[tier] = append(remote[tier], map[string]any{
+			"id": "gpt-5.5", "object": "model", "owned_by": "openai", "type": "openai",
+			"description": "Remote gpt-5.5",
+		})
 	}
 	remote["codex-pro"] = append(remote["codex-pro"], map[string]any{
 		"id": "gpt-6.2-sol", "object": "model", "owned_by": "openai", "type": "openai",
@@ -117,7 +119,9 @@ func TestCodexClientModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 	if err := json.Unmarshal(embeddedCodexClientModelsJSON, &embedded); err != nil {
 		t.Fatalf("decode embedded catalog: %v", err)
 	}
-	remoteModels := embedded.Models
+	remoteModels := slices.DeleteFunc(embedded.Models, func(model map[string]any) bool {
+		return model["slug"] == "gpt-6.2-sol" || model["slug"] == "gpt-6.2-astra"
+	})
 	for _, model := range remoteModels {
 		if model["slug"] == "gpt-5.5" {
 			model["description"] = "Remote gpt-5.5"

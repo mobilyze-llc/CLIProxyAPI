@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +30,9 @@ type Record struct {
 	TraceID string
 	// SelectionID identifies the scheduler selection decision that produced this usage record when available.
 	SelectionID string
-	Provider    string
+	// HomeSelection carries deferred accounting for reused Home dispatches.
+	HomeSelection *HomeSelection
+	Provider      string
 	// BaseURL stores the configured upstream base URL when available.
 	BaseURL string
 	// ExecutorType stores the concrete executor type that handled the request.
@@ -83,6 +86,14 @@ type Record struct {
 // accepted upstream stream that ended without its terminal frame.
 const FailureStreamTruncatedCode = "stream_truncated"
 
+// FailureRequestScopedCode marks failures belonging to the request rather than
+// the selected credential, including local capability validation failures.
+const FailureRequestScopedCode = "request_scoped"
+
+// FailureForceCooldownCode marks failures matched by a request-scoped error rule
+// configured with a cooldown action (stop-and-cooldown or continue-and-cooldown).
+const FailureForceCooldownCode = "force_cooldown"
+
 // Failure holds HTTP failure metadata for an upstream request attempt.
 type Failure struct {
 	StatusCode int
@@ -93,7 +104,7 @@ type Failure struct {
 	Code string
 }
 
-// Detail holds the token usage breakdown.
+// Detail holds the token and structured usage breakdown captured from an upstream response.
 type Detail struct {
 	InputTokens         int64
 	OutputTokens        int64
@@ -104,6 +115,36 @@ type Detail struct {
 	TotalTokens         int64
 	TokenBreakdown      TokenBreakdown
 	ResponseServiceTier string
+
+	CacheCreation5mTokens    *int64
+	CacheCreation30mTokens   *int64
+	CacheCreation1hTokens    *int64
+	CacheCreation12hTokens   *int64
+	TextInputTokens          *int64
+	ImageInputTokens         *int64
+	AudioInputTokens         *int64
+	VideoInputTokens         *int64
+	FileInputTokens          *int64
+	CachedTextTokens         *int64
+	CachedImageTokens        *int64
+	CachedAudioTokens        *int64
+	TextOutputTokens         *int64
+	ImageOutputTokens        *int64
+	AudioOutputTokens        *int64
+	AcceptedPredictionTokens *int64
+	RejectedPredictionTokens *int64
+	CacheDetails             *CacheDetails
+	WebSearchRequests        *int64
+	ImageCount               *int64
+	RequestedImageDetails    *ImageDetails
+	ImageDetails             *ImageDetails
+	MediaCounts              *MediaCounts
+	ToolUsageDetails         *ToolUsageDetails
+	Iterations               *[]IterationUsage
+	CostDetails              *CostDetails
+	Speed                    string
+	InferenceGeo             string
+	UpstreamServiceTier      string
 }
 
 type requestedModelAliasContextKey struct{}
@@ -117,6 +158,15 @@ type selectionIDContextKey struct{}
 type apiKeyContextKey struct{}
 type accessProviderContextKey struct{}
 type isNativeKeyContextKey struct{}
+type capturedIdentityContextKey struct{}
+
+type capturedIdentityHolder struct {
+	mu             sync.RWMutex
+	apiKey         string
+	accessProvider string
+	isNativeKey    bool
+	hasNativeKey   bool
+}
 
 // WithExecutionRequestID attaches a specific execution instance request ID to the context.
 func WithExecutionRequestID(ctx context.Context, requestID string) context.Context {
@@ -328,7 +378,19 @@ func WithAccessProvider(ctx context.Context, provider string) context.Context {
 	if provider == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, accessProviderContextKey{}, provider)
+	ctx = context.WithValue(ctx, accessProviderContextKey{}, provider)
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.RLock()
+		cloned := &capturedIdentityHolder{
+			apiKey:         holder.apiKey,
+			accessProvider: provider,
+			isNativeKey:    holder.isNativeKey,
+			hasNativeKey:   holder.hasNativeKey,
+		}
+		holder.mu.RUnlock()
+		ctx = context.WithValue(ctx, capturedIdentityContextKey{}, cloned)
+	}
+	return ctx
 }
 
 // WithAPIKey stores the client API key for usage sinks.
@@ -340,22 +402,103 @@ func WithAPIKey(ctx context.Context, apiKey string) context.Context {
 	if apiKey == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, apiKeyContextKey{}, apiKey)
+	ctx = context.WithValue(ctx, apiKeyContextKey{}, apiKey)
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.RLock()
+		cloned := &capturedIdentityHolder{
+			apiKey:         apiKey,
+			accessProvider: holder.accessProvider,
+			isNativeKey:    holder.isNativeKey,
+			hasNativeKey:   holder.hasNativeKey,
+		}
+		holder.mu.RUnlock()
+		ctx = context.WithValue(ctx, capturedIdentityContextKey{}, cloned)
+	}
+	return ctx
 }
 
-// APIKeyFromContext returns the client API key stored in ctx or gin.Context.
-func APIKeyFromContext(ctx context.Context) string {
+// WithCapturedIdentity stores an authoritative snapshot of the request's usage identity
+// (including empty values) so later asynchronous calls do not read a reused gin.Context.
+func WithCapturedIdentity(ctx context.Context, apiKey, accessProvider string, isNativeKey ...bool) context.Context {
 	if ctx == nil {
-		return ""
+		ctx = context.Background()
 	}
-	raw := ctx.Value(apiKeyContextKey{})
-	switch value := raw.(type) {
-	case string:
-		return strings.TrimSpace(value)
-	case []byte:
-		return strings.TrimSpace(string(value))
+	holder := &capturedIdentityHolder{
+		apiKey:         strings.TrimSpace(apiKey),
+		accessProvider: strings.TrimSpace(accessProvider),
 	}
-	if ginCtx, ok := ctx.Value("gin").(interface{ Get(string) (any, bool) }); ok && ginCtx != nil {
+	if len(isNativeKey) > 0 {
+		holder.isNativeKey = isNativeKey[0]
+		holder.hasNativeKey = true
+	}
+	return context.WithValue(ctx, capturedIdentityContextKey{}, holder)
+}
+
+// CaptureIdentity snapshots the current request's usage identity into ctx while the
+// HTTP handler is active so post-handler goroutines never read a reused gin.Context.
+func CaptureIdentity(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	if HasCapturedIdentity(ctx) {
+		return ctx
+	}
+	apiKey := apiKeyFromGinContext(ctx)
+	if apiKey == "" {
+		apiKey = APIKeyFromContext(ctx)
+	}
+	accessProvider := AccessProviderFromContext(ctx)
+	if isNative, ok := IsNativeKeyFromContext(ctx); ok {
+		return WithCapturedIdentity(ctx, apiKey, accessProvider, isNative)
+	}
+	if accessProvider != "" {
+		return WithCapturedIdentity(ctx, apiKey, accessProvider, IsNativeAccessProvider(accessProvider))
+	}
+	return WithCapturedIdentity(ctx, apiKey, accessProvider)
+}
+
+// HasCapturedIdentity reports whether ctx holds a captured usage identity snapshot.
+func HasCapturedIdentity(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder)
+	return ok && holder != nil
+}
+
+// SetCapturedAPIKey updates the captured API key in ctx when an identity snapshot holder exists.
+func SetCapturedAPIKey(ctx context.Context, apiKey string) {
+	if ctx == nil {
+		return
+	}
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.Lock()
+		holder.apiKey = strings.TrimSpace(apiKey)
+		holder.mu.Unlock()
+	}
+}
+
+func contextValueGetter(ctx context.Context) interface{ Get(string) (any, bool) } {
+	if ctx == nil {
+		return nil
+	}
+	raw := ctx.Value("gin")
+	if raw == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(raw)
+	if rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return nil
+	}
+	getter, ok := raw.(interface{ Get(string) (any, bool) })
+	if !ok {
+		return nil
+	}
+	return getter
+}
+
+func apiKeyFromGinContext(ctx context.Context) string {
+	if ginCtx := contextValueGetter(ctx); ginCtx != nil {
 		if v, exists := ginCtx.Get("userApiKey"); exists {
 			switch value := v.(type) {
 			case string:
@@ -370,10 +513,37 @@ func APIKeyFromContext(ctx context.Context) string {
 	return ""
 }
 
+// APIKeyFromContext returns the client API key stored in ctx or gin.Context.
+func APIKeyFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.RLock()
+		key := holder.apiKey
+		holder.mu.RUnlock()
+		return key
+	}
+	raw := ctx.Value(apiKeyContextKey{})
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []byte:
+		return strings.TrimSpace(string(value))
+	}
+	return apiKeyFromGinContext(ctx)
+}
+
 // AccessProviderFromContext returns the client authentication provider stored in ctx.
 func AccessProviderFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
+	}
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.RLock()
+		provider := holder.accessProvider
+		holder.mu.RUnlock()
+		return provider
 	}
 	raw := ctx.Value(accessProviderContextKey{})
 	switch value := raw.(type) {
@@ -382,7 +552,7 @@ func AccessProviderFromContext(ctx context.Context) string {
 	case []byte:
 		return strings.TrimSpace(string(value))
 	}
-	if ginCtx, ok := ctx.Value("gin").(interface{ Get(string) (any, bool) }); ok && ginCtx != nil {
+	if ginCtx := contextValueGetter(ctx); ginCtx != nil {
 		if v, exists := ginCtx.Get("accessProvider"); exists {
 			switch value := v.(type) {
 			case string:
@@ -400,13 +570,33 @@ func WithIsNativeKey(ctx context.Context, isNative bool) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, isNativeKeyContextKey{}, isNative)
+	ctx = context.WithValue(ctx, isNativeKeyContextKey{}, isNative)
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.RLock()
+		cloned := &capturedIdentityHolder{
+			apiKey:         holder.apiKey,
+			accessProvider: holder.accessProvider,
+			isNativeKey:    isNative,
+			hasNativeKey:   true,
+		}
+		holder.mu.RUnlock()
+		ctx = context.WithValue(ctx, capturedIdentityContextKey{}, cloned)
+	}
+	return ctx
 }
 
 // IsNativeKeyFromContext returns whether the client API key is native to CPA if explicitly set in ctx.
 func IsNativeKeyFromContext(ctx context.Context) (bool, bool) {
 	if ctx == nil {
 		return false, false
+	}
+	if holder, ok := ctx.Value(capturedIdentityContextKey{}).(*capturedIdentityHolder); ok && holder != nil {
+		holder.mu.RLock()
+		isNative, hasNative := holder.isNativeKey, holder.hasNativeKey
+		holder.mu.RUnlock()
+		if hasNative {
+			return isNative, true
+		}
 	}
 	raw := ctx.Value(isNativeKeyContextKey{})
 	if value, ok := raw.(bool); ok {
@@ -553,6 +743,9 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 			record.TraceID = trID
 		}
 	}
+	if record.HomeSelection == nil {
+		record.HomeSelection = HomeSelectionFromContext(ctx)
+	}
 	if strings.TrimSpace(record.SelectionID) == "" {
 		if selID := SelectionIDFromContext(ctx); selID != "" {
 			record.SelectionID = selID
@@ -575,6 +768,7 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 			record.IsNativeKey = IsNativeAccessProvider(record.AccessProvider)
 		}
 	}
+	ctx = WithCapturedIdentity(ctx, record.APIKey, record.AccessProvider, record.IsNativeKey)
 	// ensure worker is running even if Start was not called explicitly
 	m.Start(context.Background())
 	m.mu.Lock()
@@ -598,6 +792,7 @@ func (m *Manager) run(ctx context.Context) {
 			return
 		}
 		item := m.queue[0]
+		m.queue[0] = queueItem{}
 		m.queue = m.queue[1:]
 		m.mu.Unlock()
 		m.dispatch(item)

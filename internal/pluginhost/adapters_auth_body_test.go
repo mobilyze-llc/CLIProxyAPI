@@ -2,15 +2,16 @@ package pluginhost
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 
+	"github.com/MoeForge/moego/json"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
@@ -57,6 +58,47 @@ func zstdCompress(t *testing.T, raw []byte) []byte {
 	return encoder.EncodeAll(raw, nil)
 }
 
+func gzipCompress(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, errWrite := w.Write(raw); errWrite != nil {
+		t.Fatalf("gzip write: %v", errWrite)
+	}
+	if errClose := w.Close(); errClose != nil {
+		t.Fatalf("gzip close: %v", errClose)
+	}
+	return buf.Bytes()
+}
+
+// Claude routes now read through ReadRequestBody: zstd and gzip bodies on /v1/messages and
+// /v1/messages/count_tokens reach the plugin as decoded JSON.
+func TestAccessAdapterDecodesBodyForClaudeRoutes(t *testing.T) {
+	plain := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}`)
+	for _, tc := range []struct {
+		name, path, encoding string
+		body                 []byte
+	}{
+		{"messages zstd", "/v1/messages", "zstd", zstdCompress(t, plain)},
+		{"count_tokens zstd", "/v1/messages/count_tokens", "zstd", zstdCompress(t, plain)},
+		{"messages gzip", "/v1/messages", "gzip", gzipCompress(t, plain)},
+		{"count_tokens gzip", "/v1/messages/count_tokens", "gzip", gzipCompress(t, plain)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seen, calls, _, authErr := authenticateWithBody(context.Background(), t, http.MethodPost, tc.path, tc.body, tc.encoding, 0)
+			if authErr != nil || calls != 1 {
+				t.Fatalf("authErr %v calls %d", authErr, calls)
+			}
+			if !bytes.Equal(seen.DecodedBody, plain) {
+				t.Fatalf("DecodedBody = %q, want %q", seen.DecodedBody, plain)
+			}
+			if !bytes.Equal(seen.Body, tc.body) || seen.Headers.Get("Content-Encoding") != tc.encoding {
+				t.Fatalf("Body or Headers are not raw: headers %v", seen.Headers)
+			}
+		})
+	}
+}
+
 // pi and the Codex CLI send zstd bodies on POST /v1/responses; the plugin gets the decoded JSON in
 // DecodedBody, Body and Headers stay as sent, and the handler still gets the raw bytes.
 func TestAccessAdapterDecodesZstdBodyForPlugin(t *testing.T) {
@@ -90,7 +132,6 @@ func TestAccessAdapterLeavesDecodedBodyNilWhereHandlerDoesNotDecode(t *testing.T
 	}{
 		{"GET responses upgrade", http.MethodGet, "/v1/responses", compressed},
 		{"GET codex responses upgrade", http.MethodGet, "/backend-api/codex/responses", compressed},
-		{"claude handler reads raw", http.MethodPost, "/v1/messages", compressed},
 		{"gemini handler reads raw", http.MethodPost, "/v1beta/models/m:generateContent", compressed},
 		{"plain JSON labeled zstd", http.MethodPost, "/v1/responses", plainJSON},
 	} {
@@ -191,5 +232,226 @@ func TestFrontendAuthRequestDecodedBodyOverRPC(t *testing.T) {
 	}
 	if errUnmarshal := json.Unmarshal(raw, &old); errUnmarshal != nil || string(old.Body) != "raw" {
 		t.Fatalf("old plugin type failed on %s: %v", raw, errUnmarshal)
+	}
+}
+
+type countingAuthBodyReader struct {
+	reader    io.Reader
+	readBytes int
+}
+
+func (r *countingAuthBodyReader) Read(p []byte) (int, error) {
+	n, errRead := r.reader.Read(p)
+	r.readBytes += n
+	return n, errRead
+}
+
+type omitBodyFrontendAuthProvider struct {
+	frontendAuthProviderFunc
+}
+
+func (omitBodyFrontendAuthProvider) FrontendAuthProviderWantsOmitBody() bool {
+	return true
+}
+
+func TestAccessAdapterFrontendAuthOmitBodySkipsReadingAndDecodingBody(t *testing.T) {
+	const (
+		omitKey   = "plugin:auth-omit:quota"
+		aliasKey  = "plugin:auth-alias:quota"
+		bodyKey   = "plugin:auth-body:quota"
+		legacyKey = "plugin:auth-legacy:quota"
+	)
+	for _, key := range []string{omitKey, aliasKey, bodyKey, legacyKey} {
+		sdkaccess.UnregisterProvider(key)
+		defer sdkaccess.UnregisterProvider(key)
+	}
+
+	var omitSeen, aliasSeen, bodySeen, legacySeen pluginapi.FrontendAuthRequest
+	var omitCalls, aliasCalls, bodyCalls, legacyCalls int
+	newProvider := func(got *pluginapi.FrontendAuthRequest, calls *int) frontendAuthProviderFunc {
+		return frontendAuthProviderFunc{
+			identifier: "quota",
+			authenticate: func(_ context.Context, req pluginapi.FrontendAuthRequest) (pluginapi.FrontendAuthResponse, error) {
+				*calls++
+				*got = req
+				return pluginapi.FrontendAuthResponse{Authenticated: true, Principal: "user-1"}, nil
+			},
+		}
+	}
+
+	host := newHostWithRecords(
+		capabilityRecord{
+			id: "auth-omit",
+			plugin: pluginapi.Plugin{
+				SchemaVersion: pluginabi.SchemaVersionFrontendAuthOmitBody,
+				Capabilities: pluginapi.Capabilities{
+					FrontendAuthProvider:         newProvider(&omitSeen, &omitCalls),
+					FrontendAuthProviderOmitBody: true,
+				},
+			},
+		},
+		capabilityRecord{
+			id: "auth-alias",
+			plugin: pluginapi.Plugin{
+				SchemaVersion: pluginabi.SchemaVersionFrontendAuthOmitBody,
+				Capabilities: pluginapi.Capabilities{
+					FrontendAuthProvider: newProvider(&aliasSeen, &aliasCalls),
+					FrontendAuthOmitBody: true,
+				},
+			},
+		},
+		capabilityRecord{
+			id: "auth-body",
+			plugin: pluginapi.Plugin{
+				SchemaVersion: pluginabi.SchemaVersionFrontendAuthOmitBody,
+				Capabilities: pluginapi.Capabilities{
+					FrontendAuthProvider: newProvider(&bodySeen, &bodyCalls),
+				},
+			},
+		},
+		capabilityRecord{
+			id: "auth-legacy",
+			plugin: pluginapi.Plugin{
+				SchemaVersion: 6,
+				Capabilities: pluginapi.Capabilities{
+					FrontendAuthProvider:         newProvider(&legacySeen, &legacyCalls),
+					FrontendAuthProviderOmitBody: true,
+					FrontendAuthOmitBody:         true,
+				},
+			},
+		},
+	)
+	host.RegisterFrontendAuthProviders()
+
+	findProvider := func(t *testing.T, key string) sdkaccess.Provider {
+		t.Helper()
+		for _, candidate := range sdkaccess.RegisteredProviders() {
+			if candidate.Identifier() == key {
+				return candidate
+			}
+		}
+		t.Fatalf("provider %q was not registered", key)
+		return nil
+	}
+
+	plain := []byte(`{"model":"gpt-5","input":"large payload"}`)
+	compressed := zstdCompress(t, plain)
+
+	for _, tc := range []struct {
+		name string
+		key  string
+		seen *pluginapi.FrontendAuthRequest
+		call *int
+	}{
+		{name: "FrontendAuthProviderOmitBody", key: omitKey, seen: &omitSeen, call: &omitCalls},
+		{name: "FrontendAuthOmitBody", key: aliasKey, seen: &aliasSeen, call: &aliasCalls},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			savedSlots := authDecodeSlots
+			authDecodeSlots = make(chan struct{}, 1)
+			authDecodeSlots <- struct{}{}
+			defer func() { authDecodeSlots = savedSlots }()
+
+			provider := findProvider(t, tc.key)
+			counter := &countingAuthBodyReader{reader: bytes.NewReader(compressed)}
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses?stream=true", io.NopCloser(counter))
+			req.Header.Set("Authorization", "Bearer sk-test")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Encoding", "zstd")
+
+			res, authErr := provider.Authenticate(context.Background(), req)
+			if authErr != nil {
+				t.Fatalf("Authenticate() error = %v, want nil", authErr)
+			}
+			if res == nil || res.Principal != "user-1" {
+				t.Fatalf("Authenticate() result = %#v, want principal user-1", res)
+			}
+			if *tc.call != 1 {
+				t.Fatalf("Authenticate() calls = %d, want 1", *tc.call)
+			}
+			if counter.readBytes != 0 {
+				t.Fatalf("bytes read from r.Body during Authenticate = %d, want 0", counter.readBytes)
+			}
+			if tc.seen.Body != nil || tc.seen.DecodedBody != nil {
+				t.Fatalf("seen Body=%q DecodedBody=%q, want both nil", tc.seen.Body, tc.seen.DecodedBody)
+			}
+			if tc.seen.Headers.Get("Authorization") != "Bearer sk-test" || tc.seen.Query.Get("stream") != "true" {
+				t.Fatalf("seen headers/query = %v / %v, want preserved metadata", tc.seen.Headers, tc.seen.Query)
+			}
+			rest, errReadAll := io.ReadAll(req.Body)
+			if errReadAll != nil || !bytes.Equal(rest, compressed) {
+				t.Fatalf("downstream body = %q (err=%v), want untouched compressed payload", rest, errReadAll)
+			}
+			if counter.readBytes != len(compressed) {
+				t.Fatalf("bytes read after downstream ReadAll = %d, want %d", counter.readBytes, len(compressed))
+			}
+
+			// A failing body reader must not cause Authenticate to fail when omitBody is active.
+			failReq, errNewReq := http.NewRequest(http.MethodPost, "http://example.test/v1/responses", failingReadCloser{})
+			if errNewReq != nil {
+				t.Fatalf("NewRequest() error = %v", errNewReq)
+			}
+			if _, authErrFail := provider.Authenticate(context.Background(), failReq); authErrFail != nil {
+				t.Fatalf("Authenticate() with failing body reader error = %v, want nil", authErrFail)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		key  string
+		seen *pluginapi.FrontendAuthRequest
+		call *int
+	}{
+		{name: "schema 7 without opt-out", key: bodyKey, seen: &bodySeen, call: &bodyCalls},
+		{name: "schema 6 legacy ignores opt-out", key: legacyKey, seen: &legacySeen, call: &legacyCalls},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := findProvider(t, tc.key)
+			counter := &countingAuthBodyReader{reader: bytes.NewReader(compressed)}
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", io.NopCloser(counter))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Encoding", "zstd")
+
+			if _, authErr := provider.Authenticate(context.Background(), req); authErr != nil {
+				t.Fatalf("Authenticate() error = %v, want nil", authErr)
+			}
+			if *tc.call != 1 {
+				t.Fatalf("Authenticate() calls = %d, want 1", *tc.call)
+			}
+			if counter.readBytes != len(compressed) {
+				t.Fatalf("bytes read = %d, want %d", counter.readBytes, len(compressed))
+			}
+			if !bytes.Equal(tc.seen.Body, compressed) || !bytes.Equal(tc.seen.DecodedBody, plain) {
+				t.Fatalf("seen Body=%q DecodedBody=%q, want preserved", tc.seen.Body, tc.seen.DecodedBody)
+			}
+		})
+	}
+}
+
+func TestFrontendAuthRequestBodySkipsCloneForRPCProvider(t *testing.T) {
+	body := []byte("original-request-body")
+
+	rpcProvider := rpcFrontendAuthProvider{rpcPluginAdapter: &rpcPluginAdapter{client: &capturePluginClient{}}}
+	gotRPC := frontendAuthRequestBody(rpcProvider, body)
+	if len(gotRPC) != len(body) || &gotRPC[0] != &body[0] {
+		t.Fatal("frontendAuthRequestBody cloned body for rpcFrontendAuthProvider, want shared backing slice")
+	}
+
+	inProcProvider := frontendAuthProviderFunc{identifier: "in-proc"}
+	gotInProc := frontendAuthRequestBody(inProcProvider, body)
+	if !bytes.Equal(gotInProc, body) {
+		t.Fatalf("frontendAuthRequestBody(inProc) = %q, want %q", gotInProc, body)
+	}
+	if &gotInProc[0] == &body[0] {
+		t.Fatal("frontendAuthRequestBody did not clone body for in-process provider")
+	}
+	gotInProc[0] = 'X'
+	if body[0] != 'o' {
+		t.Fatalf("mutating in-process request body mutated original buffer: %q", body)
+	}
+
+	if gotNil := frontendAuthRequestBody(rpcProvider, nil); gotNil != nil {
+		t.Fatalf("frontendAuthRequestBody(nil) = %v, want nil", gotNil)
 	}
 }

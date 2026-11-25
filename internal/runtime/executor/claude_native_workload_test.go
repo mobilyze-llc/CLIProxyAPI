@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestClaudeNativeWorkloadMarkerKeepsOutboundPrefixIdentical(t *testing.T) {
@@ -31,7 +31,7 @@ func TestClaudeNativeWorkloadMarkerKeepsOutboundPrefixIdentical(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			marker := `{"type":"ephemeral"` + test.ttl + `}`
-			payload := []byte(fmt.Sprintf(`{"model":"claude-opus-5-5","max_tokens":1000,"tools":[{"name":"read_file","description":"Read a file.","input_schema":{"type":"object","properties":{"path":{"type":"string"}}},"cache_control":%[1]s}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.312; cc_entrypoint=sdk-ts; cch=00000;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.","cache_control":%[1]s},{"type":"text","text":"Stable project instructions.","cache_control":%[1]s}],"messages":[{"role":"user","content":[{"type":"text","text":"Stable task.","cache_control":%[1]s}]}],"metadata":{"user_id":%[2]s},"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},"stream":%[3]t}`, marker, userID, test.stream))
+			payload := []byte(fmt.Sprintf(`{"model":"claude-opus-5-5","max_tokens":1000,"tools":[{"name":"read_file","description":"Read a file.","input_schema":{"type":"object","properties":{"path":{"type":"string"}}},"cache_control":%[1]s}],"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.321; cc_entrypoint=sdk-ts; cch=00000;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.","cache_control":%[1]s},{"type":"text","text":"Stable project instructions.","cache_control":%[1]s}],"messages":[{"role":"user","content":[{"type":"text","text":"Stable task.","cache_control":%[1]s}]}],"metadata":{"user_id":%[2]s},"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},"stream":%[3]t}`, marker, userID, test.stream))
 			auth := &cliproxyauth.Auth{
 				ID:         "native-workload-fixture",
 				Attributes: map[string]string{"api_key": "sk-ant-oat-test-oauth-key"},
@@ -63,9 +63,9 @@ func TestClaudeNativeWorkloadMarkerKeepsOutboundPrefixIdentical(t *testing.T) {
 			exec := NewClaudeExecutor(&config.Config{})
 
 			inboundUserAgents := []string{
-				"claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276)",
-				"claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276, workload/cron)",
-				"claude-cli/2.1.312 (external, sdk-ts, agent-sdk/0.3.276)",
+				"claude-cli/2.1.321 (external, sdk-ts, agent-sdk/0.3.276)",
+				"claude-cli/2.1.321 (external, sdk-ts, agent-sdk/0.3.276, workload/cron)",
+				"claude-cli/2.1.321 (external, sdk-ts, agent-sdk/0.3.276)",
 			}
 			for _, userAgent := range inboundUserAgents {
 				headers := http.Header{
@@ -94,11 +94,11 @@ func TestClaudeNativeWorkloadMarkerKeepsOutboundPrefixIdentical(t *testing.T) {
 				t.Fatalf("captured %d upstream requests, want %d", len(bodies), len(inboundUserAgents))
 			}
 			for i, body := range bodies {
-				if got, want := gjson.GetBytes(body, "system").Raw, gjson.GetBytes(bodies[0], "system").Raw; got != want {
+				if got, want := ojson.GetBytes(body, "system").Raw, ojson.GetBytes(bodies[0], "system").Raw; got != want {
 					t.Errorf("request %d (%s) outbound system = %s, want ordinary %s", i, inboundUserAgents[i], got, want)
 				}
 				for _, field := range []string{"system.#.cache_control", "messages", "tools"} {
-					if got, want := gjson.GetBytes(body, field).Raw, gjson.GetBytes(payload, field).Raw; got != want {
+					if got, want := ojson.GetBytes(body, field).Raw, ojson.GetBytes(payload, field).Raw; got != want {
 						t.Errorf("request %d (%s) outbound %s = %s, want inbound %s", i, inboundUserAgents[i], field, got, want)
 					}
 				}

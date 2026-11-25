@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/tidwall/gjson"
 )
 
 // ClaudeUsageUserAgent returns the Claude Code User-Agent a usage read carries: the
@@ -33,7 +33,7 @@ func EffectiveProxyURL(ctx context.Context, cfg *config.Config, auth *cliproxyau
 // window would erase its exhaustion. It returns nil when no window is present,
 // so a snapshot holding only the limit-reached flag never erases the windows.
 func ParseCodexUsageHeaders(body []byte) http.Header {
-	rateLimit := gjson.GetBytes(body, "rate_limit")
+	rateLimit := ojson.GetBytes(body, "rate_limit")
 	headers := make(http.Header)
 	for _, name := range []string{"Primary", "Secondary"} {
 		window := rateLimit.Get(strings.ToLower(name) + "_window")
@@ -41,16 +41,16 @@ func ParseCodexUsageHeaders(body []byte) http.Header {
 			continue
 		}
 		prefix := "X-Codex-" + name + "-"
-		if used := window.Get("used_percent"); used.Type == gjson.Number {
+		if used := window.Get("used_percent"); used.Type == ojson.Number {
 			headers.Set(prefix+"Used-Percent", used.Raw)
 		}
-		if seconds := window.Get("limit_window_seconds"); seconds.Type == gjson.Number {
+		if seconds := window.Get("limit_window_seconds"); seconds.Type == ojson.Number {
 			headers.Set(prefix+"Window-Minutes", strconv.FormatInt(seconds.Int()/60, 10))
 		}
-		if resetAfter := window.Get("reset_after_seconds"); resetAfter.Type == gjson.Number {
+		if resetAfter := window.Get("reset_after_seconds"); resetAfter.Type == ojson.Number {
 			headers.Set(prefix+"Reset-After-Seconds", resetAfter.Raw)
 		}
-		if resetAt := window.Get("reset_at"); resetAt.Type == gjson.Number {
+		if resetAt := window.Get("reset_at"); resetAt.Type == ojson.Number {
 			headers.Set(prefix+"Reset-At", resetAt.Raw)
 		}
 	}
@@ -69,11 +69,11 @@ func ParseCodexUsageHeaders(body []byte) http.Header {
 func ParseClaudeUsageHeaders(body []byte) http.Header {
 	headers := make(http.Header)
 	for name, path := range map[string]string{"5h": "five_hour", "7d": "seven_day"} {
-		window := gjson.GetBytes(body, path)
+		window := ojson.GetBytes(body, path)
 		utilization := window.Get("utilization")
 		resetAt, errParse := time.Parse(time.RFC3339, window.Get("resets_at").String())
 		prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
-		if utilization.Type == gjson.Number {
+		if utilization.Type == ojson.Number {
 			headers.Set(prefix+"Utilization", strconv.FormatFloat(utilization.Float()/100, 'f', -1, 64))
 		}
 		if errParse == nil {
@@ -87,13 +87,13 @@ func ParseClaudeUsageHeaders(body []byte) http.Header {
 }
 
 func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) bool {
-	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+	if !ojson.ValidBytes(body) || !ojson.ParseBytes(body).IsObject() {
 		return false
 	}
 	active := false
 	for _, path := range []string{"five_hour", "seven_day"} {
-		window := gjson.GetBytes(body, path)
-		idle := window.Type == gjson.Null && window.Exists()
+		window := ojson.GetBytes(body, path)
+		idle := window.Type == ojson.Null && window.Exists()
 		if idle {
 			continue
 		}
@@ -101,7 +101,7 @@ func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) b
 			return false
 		}
 		utilization := window.Get("utilization")
-		if utilization.Type != gjson.Number {
+		if utilization.Type != ojson.Number {
 			return false
 		}
 		percent := utilization.Float()
@@ -109,7 +109,7 @@ func ClaudeUsageCredentialQuotaAvailable(body []byte, readStartedAt time.Time) b
 			return false
 		}
 		resetAt := window.Get("resets_at")
-		if resetAt.Type != gjson.String {
+		if resetAt.Type != ojson.String {
 			return false
 		}
 		reset, errParse := time.Parse(time.RFC3339, resetAt.Str)

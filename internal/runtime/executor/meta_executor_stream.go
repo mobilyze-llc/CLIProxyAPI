@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 )
 
 func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {
@@ -52,7 +52,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	if errRequest != nil {
 		return nil, errRequest
 	}
-	applyMetaAPIHeaders(httpReq, enriched, token, true, opts.Headers)
+	applyMetaAPIHeaders(httpReq, enriched, token, true, opts.Headers, prepared.effectiveModel)
 	e.recordMetaRequest(ctx, enriched, url, httpReq.Header.Clone(), prepared.body)
 
 	httpClient := helps.NewProxyAwareHTTPClient(ctx, e.cfg, enriched, 0)
@@ -68,11 +68,11 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("meta executor: close response body error: %v", errClose)
 		}
+		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 		if errRead != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 			return nil, errRead
 		}
-		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
 		return nil, wrapMetaUpstreamError(httpResp.StatusCode, data)
 	}
@@ -93,6 +93,8 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		var param any
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
+		var outputTracker helps.ResponsesStreamOutputTracker
+		var sawEventHeader bool
 		var terminalDelivered bool
 		emitTranslatedLine := func(translatedLine []byte) bool {
 			lines, errBridge := prepared.applyPatch.Stream(translatedLine)
@@ -133,6 +135,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			trimmedLine := bytes.TrimSpace(line)
 			if bytes.HasPrefix(trimmedLine, metaEventTag) {
+				sawEventHeader = true
 				eventName := bytes.TrimSpace(trimmedLine[len(metaEventTag):])
 				if bytes.Equal(eventName, []byte(metaSubscriptionUsageEventType)) {
 					if pendingEventLine != nil {
@@ -179,7 +182,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 				continue
 			}
 			eventData := bytes.TrimSpace(trimmedLine[len(dataTag):])
-			eventType := gjson.GetBytes(eventData, "type").String()
+			eventType := ojson.GetBytesNoCopy(eventData, "type").String()
 			if isMetaSubscriptionUsageEvent(eventType, eventData) {
 				pendingEventLine = nil
 				filteringSubscriptionUsage = false
@@ -189,7 +192,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			if filteringSubscriptionUsage {
 				if eventType == "" {
 					pendingEventLine = nil
-					if gjson.ValidBytes(eventData) {
+					if ojson.ValidBytes(eventData) {
 						filteringSubscriptionUsage = false
 					}
 					skipFilteredBlankLine = true
@@ -209,14 +212,34 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 				}
 				return
 			}
+			var synthEvents [][]byte
 			switch eventType {
 			case "response.output_item.done":
 				xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
+				outputTracker.Observe(eventType, eventData)
 			case "response.completed", "response.incomplete":
-				if detail, ok := helps.ParseCodexUsage(eventData); ok {
+				if detail, ok := helps.ParseCodexUsageWithOutputItems(eventData, outputItemsByIndex, outputItemsFallback); ok {
 					streamUsage.Observe(detail, true)
 				}
 				eventData = patchCodexCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
+				synthEvents, eventData = outputTracker.SynthesizeMissingOutputEvents(eventData)
+			default:
+				outputTracker.Observe(eventType, eventData)
+			}
+			for _, synthEvent := range synthEvents {
+				if sawEventHeader || pendingEventLine != nil {
+					if synthType := ojson.GetBytesNoCopy(synthEvent, "type").String(); synthType != "" {
+						if !emitTranslatedLine([]byte("event: " + synthType)) {
+							return
+						}
+					}
+				}
+				if !emitTranslatedLine(append([]byte("data: "), synthEvent...)) {
+					return
+				}
+				if !emitTranslatedLine([]byte{}) {
+					return
+				}
 			}
 			if pendingEventLine != nil {
 				if !emitTranslatedLine(pendingEventLine) {

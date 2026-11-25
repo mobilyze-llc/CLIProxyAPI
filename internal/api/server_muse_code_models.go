@@ -15,6 +15,10 @@ import (
 const museCodeModelsPath = "/muse-code/models"
 
 func (s *Server) museCodeModels(c *gin.Context) {
+	if cfg := s.getConfig(); cfg != nil && cfg.Home.Enabled {
+		s.museCodeHandler.HandleModels(c)
+		return
+	}
 	credential, baseURL, token := s.museCodeCredential()
 	if credential == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no usable Meta credential for Muse Code models"})
