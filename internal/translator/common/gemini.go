@@ -220,6 +220,23 @@ func MergeAdjacentGeminiUserContents(contents [][]byte) [][]byte {
 		return contents
 	}
 	merged := make([][]byte, 0, len(contents))
+	pendingContents := make([][]byte, 0, len(contents))
+	pendingParts := make([][]byte, 0, len(contents))
+	flushPending := func() {
+		if len(pendingContents) == 0 {
+			return
+		}
+		if len(pendingContents) == 1 {
+			merged = append(merged, pendingContents[0])
+		} else if updated, errSet := ojson.SetRawBytes(pendingContents[0], "parts", JoinRawArray(pendingParts)); errSet == nil {
+			merged = append(merged, updated)
+		} else {
+			merged = append(merged, pendingContents...)
+		}
+		pendingContents = pendingContents[:0]
+		pendingParts = pendingParts[:0]
+	}
+
 	for _, content := range contents {
 		if len(content) == 0 {
 			continue
@@ -229,29 +246,17 @@ func MergeAdjacentGeminiUserContents(contents [][]byte) [][]byte {
 		if !partsResult.IsArray() || partsResult.Raw == "[]" || !partsResult.Get("0").Exists() {
 			continue
 		}
-		if len(merged) > 0 {
-			lastIndex := len(merged) - 1
-			lastJSON := merged[lastIndex]
-			lastRole := ojson.GetBytesNoCopy(lastJSON, "role").String()
-			if lastRole == "user" && role == "user" && !ContentHasGeminiFunctionResponse(lastJSON) && !ContentHasGeminiFunctionResponse(content) {
-				lastParts := ojson.GetBytesNoCopy(lastJSON, "parts").Array()
-				currentParts := partsResult.Array()
-				combinedParts := make([][]byte, 0, len(lastParts)+len(currentParts))
-				for _, p := range lastParts {
-					combinedParts = append(combinedParts, []byte(p.Raw))
-				}
-				for _, p := range currentParts {
-					combinedParts = append(combinedParts, []byte(p.Raw))
-				}
-				updated, err := ojson.SetRawBytes(lastJSON, "parts", JoinRawArray(combinedParts))
-				if err == nil {
-					merged[lastIndex] = updated
-					continue
-				}
+		if role == "user" && !ContentHasGeminiFunctionResponse(content) {
+			pendingContents = append(pendingContents, content)
+			for _, part := range partsResult.Array() {
+				pendingParts = append(pendingParts, []byte(part.Raw))
 			}
+			continue
 		}
+		flushPending()
 		merged = append(merged, content)
 	}
+	flushPending()
 	return merged
 }
 
@@ -441,4 +446,38 @@ func SetGeminiFunctionResponseRawDoc(doc *ojson.Doc, path string, rawJSON string
 		return
 	}
 	SetGeminiFunctionResponseResultDoc(doc, path, ojson.Parse(trimmed))
+}
+
+// SetGeminiFunctionCallArgsDoc writes a valid JSON object to path on doc for Gemini functionCall.args.
+// Valid JSON-object strings are unwrapped; all other non-object or invalid inputs fall back to {}.
+func SetGeminiFunctionCallArgsDoc(doc *ojson.Doc, path string, value ojson.Result) {
+	if doc == nil {
+		return
+	}
+	if value.IsObject() {
+		raw := strings.TrimSpace(value.Raw)
+		if ojson.Valid(raw) {
+			_ = doc.SetRaw(path, raw)
+			return
+		}
+	}
+	if value.Type == ojson.String {
+		raw := strings.TrimSpace(value.String())
+		if raw != "" && ojson.Valid(raw) && ojson.Parse(raw).IsObject() {
+			_ = doc.SetRaw(path, raw)
+			return
+		}
+	}
+	_ = doc.SetRaw(path, `{}`)
+}
+
+// NormalizeGeminiFunctionCallPart ensures a native Gemini functionCall part carries a valid JSON object
+// in functionCall.args while preserving all other fields on the part.
+func NormalizeGeminiFunctionCallPart(part ojson.Result) []byte {
+	if args := part.Get("functionCall.args"); args.IsObject() && ojson.Valid(strings.TrimSpace(args.Raw)) {
+		return []byte(part.Raw)
+	}
+	partDoc := ojson.NewDoc([]byte(part.Raw))
+	SetGeminiFunctionCallArgsDoc(partDoc, "functionCall.args", part.Get("functionCall.args"))
+	return partDoc.Bytes()
 }

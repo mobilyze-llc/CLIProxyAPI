@@ -108,10 +108,14 @@ func (e *CopilotExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) 
 
 // HttpRequest only sends the inference credential to the account's trusted origin.
 func (e *CopilotExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Response, error) {
-	return e.httpRequest(ctx, auth, req, nil)
+	authorizedReq, errPrepare := e.prepareAuthorizedRequest(ctx, auth, req)
+	if errPrepare != nil {
+		return nil, errPrepare
+	}
+	return e.doHTTPRequest(authorizedReq.Context(), auth, authorizedReq, nil)
 }
 
-func (e *CopilotExecutor) httpRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request, reporter *helps.UsageReporter) (*http.Response, error) {
+func (e *CopilotExecutor) prepareAuthorizedRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request) (*http.Request, error) {
 	if req == nil || req.URL == nil || auth == nil {
 		return nil, fmt.Errorf("copilot: missing request or auth record")
 	}
@@ -133,6 +137,10 @@ func (e *CopilotExecutor) httpRequest(ctx context.Context, auth *cliproxyauth.Au
 		req.Header = make(http.Header)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	return req, nil
+}
+
+func (e *CopilotExecutor) doHTTPRequest(ctx context.Context, auth *cliproxyauth.Auth, req *http.Request, reporter *helps.UsageReporter) (*http.Response, error) {
 	client := *helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if reporter != nil {
@@ -208,7 +216,11 @@ func (e *CopilotExecutor) prepare(ctx context.Context, auth *cliproxyauth.Auth, 
 	helps.NormalizeCopilotRequest(doc, route, from, source, stream)
 	input := helps.ParseCopilotTurnInput(req.Payload, from)
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	canReplay := (to == sdktranslator.FormatOpenAI && from != to || to == sdktranslator.FormatOpenAIResponse && from == sdktranslator.FormatOpenAI) && !helps.CopilotPayloadMayWrite(e.cfg, baseModel, requestedModel, from.String(), to.String(), opts.Headers, "model")
+	var sourceModelIDs []string
+	if resolved.catalog != nil && strings.HasPrefix(req.Model, copilot.ModelPrefix) {
+		sourceModelIDs = []string{thinking.ParseSuffix(req.Model).ModelName}
+	}
+	canReplay := (to == sdktranslator.FormatOpenAI && from != to || to == sdktranslator.FormatOpenAIResponse && from == sdktranslator.FormatOpenAI) && !helps.CopilotPayloadMayWrite(e.cfg, baseModel, requestedModel, from.String(), to.String(), opts.Headers, sourceModelIDs, "model")
 	var restored bool
 	var responsesCapture *helps.CopilotResponsesCapture
 	if to == sdktranslator.FormatOpenAI {
@@ -222,7 +234,7 @@ func (e *CopilotExecutor) prepare(ctx context.Context, auth *cliproxyauth.Auth, 
 		helps.NormalizeCopilotSystemPrompt(doc, route, from, source)
 		if from == sdktranslator.FormatOpenAI && canReplay {
 			_, restored = e.turns.RestoreResponsesReplay(doc, auth.ID, opts, ojson.Result{})
-		} else if from == sdktranslator.FormatClaude && !helps.CopilotPayloadMayWrite(e.cfg, baseModel, requestedModel, from.String(), to.String(), opts.Headers, "model", "input", "instructions", "conversation", "previous_response_id") {
+		} else if from == sdktranslator.FormatClaude && !helps.CopilotPayloadMayWrite(e.cfg, baseModel, requestedModel, from.String(), to.String(), opts.Headers, sourceModelIDs, "model", "input", "instructions", "conversation", "previous_response_id") {
 			// No later payload rule can retarget this history. Bind the capture
 			// to both the client transcript and the restored upstream input.
 			responsesCapture, restored = e.turns.RestoreResponsesReplay(doc, auth.ID, opts, source)
@@ -233,7 +245,7 @@ func (e *CopilotExecutor) prepare(ctx context.Context, auth *cliproxyauth.Auth, 
 	}
 	var messagesCapture *helps.CopilotMessagesCapture
 	if to == sdktranslator.FormatClaude {
-		if from == sdktranslator.FormatOpenAI && !helps.CopilotPayloadMayWrite(e.cfg, baseModel, requestedModel, from.String(), to.String(), opts.Headers, "model", "messages", "system") {
+		if from == sdktranslator.FormatOpenAI && !helps.CopilotPayloadMayWrite(e.cfg, baseModel, requestedModel, from.String(), to.String(), opts.Headers, sourceModelIDs, "model", "messages", "system") {
 			// Derive the prefix before rolling cache breakpoints. No matching payload rule can rewrite this history.
 			messagesCapture, restored = e.turns.PrepareMessagesReplay(doc, source, auth.ID, opts)
 			if countOnly || responseFormat != sdktranslator.FormatOpenAI {
@@ -248,7 +260,7 @@ func (e *CopilotExecutor) prepare(ctx context.Context, auth *cliproxyauth.Auth, 
 		}
 		stripPromptCacheOptionsDoc(doc)
 	}
-	helps.ApplyPayloadConfigWithRequestDoc(e.cfg, baseModel, to.String(), from.String(), "", doc, originalTo, requestedModel, helps.PayloadRequestPath(opts), opts.Headers)
+	helps.ApplyPayloadConfigWithRequestDoc(e.cfg, baseModel, to.String(), from.String(), "", doc, originalTo, requestedModel, helps.PayloadRequestPath(opts), opts.Headers, sourceModelIDs...)
 	if restored && (doc.Get("model").Type != ojson.String || doc.Get("model").String() != baseModel) {
 		return copilotPreparedRequest{}, statusErr{code: http.StatusBadRequest, msg: "copilot: private replay cannot be sent to a different model"}
 	}
@@ -266,7 +278,8 @@ func (e *CopilotExecutor) send(ctx context.Context, auth *cliproxyauth.Auth, opt
 	if !copilot.TrustedAPI(base) {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "copilot: missing trusted API endpoint"}
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+prepared.route.Endpoint, bytes.NewReader(prepared.body))
+	upstreamURL := strings.TrimRight(base, "/") + prepared.route.Endpoint
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(prepared.body))
 	if err != nil {
 		return nil, err
 	}
@@ -283,12 +296,31 @@ func (e *CopilotExecutor) send(ctx context.Context, auth *cliproxyauth.Auth, opt
 	helps.SetCopilotInferenceHeaders(httpReq.Header, prepared.route, wire, input.Initiator, prepared.turn)
 	reporter.SetUpstreamModel(prepared.route.Info.ID)
 	reporter.SetTranslatedRequestMetadata(prepared.body, prepared.route.Format.String())
-	resp, err := e.httpRequest(ctx, auth, httpReq, reporter)
-	if err != nil {
-		return nil, err
+	authorizedReq, errPrepare := e.prepareAuthorizedRequest(ctx, auth, httpReq)
+	if errPrepare != nil {
+		return nil, errPrepare
 	}
-	body, err := helps.DecodeResponseBody(resp.Body, resp.Header)
-	if err != nil {
+	authType, authValue := auth.AccountInfo()
+	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
+		URL:       upstreamURL,
+		Method:    http.MethodPost,
+		Headers:   authorizedReq.Header.Clone(),
+		Body:      prepared.body,
+		Provider:  e.Identifier(),
+		AuthID:    auth.ID,
+		AuthLabel: auth.Label,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
+	resp, errDo := e.doHTTPRequest(authorizedReq.Context(), auth, authorizedReq, reporter)
+	if errDo != nil {
+		helps.RecordAPIResponseError(ctx, e.cfg, errDo)
+		return nil, errDo
+	}
+	helps.RecordAPIResponseMetadata(ctx, e.cfg, resp.StatusCode, resp.Header.Clone())
+	body, errDecode := helps.DecodeResponseBody(resp.Body, resp.Header)
+	if errDecode != nil {
+		helps.RecordAPIResponseError(ctx, e.cfg, errDecode)
 		return nil, statusErr{code: http.StatusBadGateway, msg: "copilot: invalid upstream content encoding"}
 	}
 	resp.Body = body
@@ -296,7 +328,11 @@ func (e *CopilotExecutor) send(ctx context.Context, auth *cliproxyauth.Auth, opt
 	resp.Header.Del("Content-Length")
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer closeCopilotResponse(resp.Body)
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		payload, errRead := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		helps.AppendAPIResponseChunk(ctx, e.cfg, payload)
+		if errRead != nil {
+			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
+		}
 		return nil, newOpenAICompatStatusError(resp.StatusCode, resp.Header, payload)
 	}
 	return resp, nil

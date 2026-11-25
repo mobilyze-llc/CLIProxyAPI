@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -217,12 +218,22 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			case "response.output_item.done":
 				xaiCollectOutputItemDone(eventData, outputItemsByIndex, &outputItemsFallback)
 				outputTracker.Observe(eventType, eventData)
-			case "response.completed", "response.incomplete":
+			case "response.completed", "response.incomplete", "response.done":
 				if detail, ok := helps.ParseCodexUsageWithOutputItems(eventData, outputItemsByIndex, outputItemsFallback); ok {
 					streamUsage.Observe(detail, true)
 				}
 				eventData = patchCodexCompletedOutput(eventData, outputItemsByIndex, outputItemsFallback)
 				synthEvents, eventData = outputTracker.SynthesizeMissingOutputEvents(eventData)
+				if eventType == "response.done" && prepared.responseFormat != sdktranslator.FormatOpenAIResponse {
+					var normalizedType string
+					normalizedType, eventData = normalizeMetaTerminalEventForTranslation(eventData, eventType)
+					if pendingEventLine != nil {
+						trimmedPending := bytes.TrimSpace(pendingEventLine)
+						if bytes.HasPrefix(trimmedPending, metaEventTag) && bytes.Equal(bytes.TrimSpace(trimmedPending[len(metaEventTag):]), []byte("response.done")) {
+							pendingEventLine = []byte("event: " + normalizedType)
+						}
+					}
+				}
 			default:
 				outputTracker.Observe(eventType, eventData)
 			}
@@ -250,7 +261,7 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			if !emitTranslatedLine(append([]byte("data: "), eventData...)) {
 				return
 			}
-			if eventType == "response.completed" || eventType == "response.incomplete" {
+			if isMetaTerminalResponseEvent(eventType) {
 				terminalDelivered = true
 			}
 		}
@@ -292,6 +303,19 @@ func (e *MetaExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
 			}
+			return
+		}
+		if ctx.Err() != nil || terminalDelivered {
+			return
+		}
+		truncErr := statusErr{code: http.StatusBadGateway, msg: "upstream stream closed before terminal event", streamTruncated: true}
+		helps.RecordAPIResponseError(ctx, e.cfg, truncErr)
+		if !streamUsage.PublishFailure(ctx, reporter, truncErr) {
+			reporter.PublishFailure(ctx, truncErr)
+		}
+		select {
+		case out <- cliproxyexecutor.StreamChunk{Err: truncErr}:
+		case <-ctx.Done():
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil

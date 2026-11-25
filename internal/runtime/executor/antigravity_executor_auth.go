@@ -51,6 +51,10 @@ func (e *AntigravityExecutor) ShouldPrepareRequestAuth(auth *cliproxyauth.Auth) 
 	return antigravityProjectIDFromAuth(auth) == ""
 }
 
+func (e *AntigravityExecutor) ShouldPrepareHomePluginRequestAuth(auth *cliproxyauth.Auth) bool {
+	return e.ShouldPrepareRequestAuth(auth) || (e.cfg != nil && e.cfg.Home.Enabled && antigravityNeedsAccessTokenRefresh(auth))
+}
+
 func antigravityNeedsAccessTokenRefresh(auth *cliproxyauth.Auth) bool {
 	if auth == nil {
 		return false
@@ -76,7 +80,7 @@ func detachedAntigravityCredentialContext(ctx context.Context) context.Context {
 }
 
 func (e *AntigravityExecutor) PrepareRequestAuth(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
-	if auth == nil || !e.ShouldPrepareRequestAuth(auth) {
+	if !e.ShouldPrepareHomePluginRequestAuth(auth) {
 		return nil, nil
 	}
 
@@ -88,6 +92,11 @@ func (e *AntigravityExecutor) PrepareRequestAuth(ctx context.Context, auth *clip
 	if refreshedAuth != nil {
 		updated = refreshedAuth
 	}
+	if e.cfg != nil && e.cfg.Home.Enabled {
+		if expiry, known := updated.ExpirationTime(); known && !expiry.After(antigravityNow()) {
+			return nil, statusErr{code: http.StatusBadGateway, msg: "home returned an expired antigravity access token"}
+		}
+	}
 	if antigravityProjectIDFromAuth(updated) != "" {
 		e.maybeRefreshAntigravityCreditsHint(ctx, updated, token)
 		return updated, nil
@@ -95,6 +104,10 @@ func (e *AntigravityExecutor) PrepareRequestAuth(ctx context.Context, auth *clip
 
 	projectID, errProject := e.fetchAntigravityProjectID(ctx, updated, token)
 	if errProject != nil {
+		var upstreamErr *antigravity.HTTPStatusError
+		if errors.As(errProject, &upstreamErr) {
+			cliproxyauth.ReportHomeAuthPreparationFailure(ctx, updated, upstreamErr.StatusCode(), upstreamErr.ResponseBody())
+		}
 		if ctx != nil && ctx.Err() != nil && antigravityStatusCodeFromError(errProject) == 0 {
 			return nil, errProject
 		}
@@ -227,16 +240,34 @@ func (e *AntigravityExecutor) refreshTokenWithOptions(ctx context.Context, auth 
 	if auth.Metadata == nil {
 		auth.Metadata = make(map[string]any)
 	}
+	grantIdentity := antigravitySignatureGrantIdentity(auth)
+	grantRetained := strings.TrimSpace(metaStringValue(auth.Metadata, antigravitySignatureGrantScopeMetadataKey))
+	grantBinding := strings.TrimSpace(metaStringValue(auth.Metadata, antigravitySignatureGrantBindingMetadataKey))
+	currentBinding := antigravitySignatureGrantBinding(auth)
+	if grantRetained != "" && grantBinding == currentBinding {
+		// Preserve identity only when a prior refresh explicitly bound this exact token pair.
+		if grantIdentity != "" {
+			auth.Metadata[antigravitySignatureGrantScopeMetadataKey] = grantIdentity
+		}
+	} else {
+		delete(auth.Metadata, antigravitySignatureGrantScopeMetadataKey)
+	}
 	auth.Metadata["access_token"] = tokenResp.AccessToken
 	if tokenResp.RefreshToken != "" {
 		auth.Metadata["refresh_token"] = tokenResp.RefreshToken
+	}
+	if retained := strings.TrimSpace(metaStringValue(auth.Metadata, antigravitySignatureGrantScopeMetadataKey)); retained != "" {
+		auth.Metadata[antigravitySignatureGrantBindingMetadataKey] = antigravitySignatureGrantBinding(auth)
+	} else {
+		auth.Metadata[antigravitySignatureGrantScopeMetadataKey] = grantIdentity
+		auth.Metadata[antigravitySignatureGrantBindingMetadataKey] = antigravitySignatureGrantBinding(auth)
 	}
 	auth.Metadata["expires_in"] = tokenResp.ExpiresIn
 	now := time.Now()
 	auth.Metadata["timestamp"] = now.UnixMilli()
 	auth.Metadata["expired"] = now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339)
 	auth.Metadata["type"] = antigravityAuthType
-	if discoverProject {
+	if discoverProject && !isAntigravityAuthDisabled(auth) {
 		if errProject := e.ensureAntigravityProjectID(ctx, auth, tokenResp.AccessToken); errProject != nil {
 			log.Warnf("antigravity executor: ensure project id failed: %v", errProject)
 		}
@@ -382,7 +413,7 @@ func newAntigravityProjectDiscoveryHTTPClient(ctx context.Context, cfg *config.C
 }
 
 func (e *AntigravityExecutor) ensureAntigravityProjectID(ctx context.Context, auth *cliproxyauth.Auth, accessToken string) error {
-	if auth == nil {
+	if isAntigravityAuthDisabled(auth) {
 		return nil
 	}
 

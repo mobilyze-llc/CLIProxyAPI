@@ -1288,6 +1288,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
 		execCtx = m.WithAuthTransport(execCtx, auth)
+		execCtx = m.withAntigravityModelState(execCtx, auth)
 		execCtx = contextWithRequestedModelAlias(execCtx, pickOpts, routeModel)
 		execCtx = coreusage.WithSelectionID(execCtx, selectionIDFromOptions(pickOpts))
 		execCtx = m.newUpstreamAttemptContext(execCtx)
@@ -1589,6 +1590,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
 		execCtx = m.WithAuthTransport(execCtx, auth)
+		execCtx = m.withAntigravityModelState(execCtx, auth)
 		execCtx = contextWithRequestedModelAlias(execCtx, pickOpts, routeModel)
 		execCtx = coreusage.WithSelectionID(execCtx, selectionIDFromOptions(pickOpts))
 		execCtx = m.newUpstreamAttemptContext(execCtx)
@@ -2017,6 +2019,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 		}
 		execCtx = m.WithAuthTransport(execCtx, auth)
+		execCtx = m.withAntigravityModelState(execCtx, auth)
 		// Enrich before auth preparation so prepare-stage usage records observe the client request.
 		if homeMode {
 			clearSchedulerSelectionID(opts.Metadata)
@@ -2065,7 +2068,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		var preparedAuth *Auth
 		var errPrepare error
 		if selection != nil {
-			preparedAuth, errPrepare = m.prepareHomeRequestAuth(execCtx, executor, selection)
+			preparedAuth, errPrepare = m.prepareHomeRequestAuth(execCtx, selection, models[0])
 		} else {
 			preparedAuth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		}
@@ -2098,7 +2101,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				}
 			}
 			stateModel := m.selectionModelKeyForAuth(auth, routeModel)
-			if stateModel == "" {
+			if selection != nil && selection.ExecutorPlugin != "" {
+				stateModel = models[0]
+			} else if stateModel == "" {
 				stateModel = canonicalModelKey(routeModel)
 			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: stateModel, RouteModel: routeModel, Success: false, Error: resultErrorFromError(errPrepare), Options: pickOpts, AccessToken: authAccessTokenForRequest(execCtx, auth, pickOpts.Headers), RefreshToken: authRefreshToken(auth), CredentialVersion: auth.CredentialVersion, RegistrationEpoch: auth.RegistrationEpoch}
@@ -2154,28 +2159,19 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			auth = preparedAuth
 		}
 		execReq := sanitizeDownstreamWebsocketFallbackRequest(execCtx, auth, req)
-		if selection != nil && !restoreExecutionModel {
+		restoreModel := restoreExecutionModel && (selection == nil || selection.ExecutorPlugin == "")
+		if selection != nil && !restoreModel {
 			execReq = attachResolvedHomeModelInfo(execReq, auth, routeModel, selection.modelInfo, selection.configurationUpdateSupport)
 		}
 		streamExecutionModel := ""
-		if restoreExecutionModel {
+		if restoreModel {
 			streamExecutionModel = executionModel
 		}
 		execOpts := opts
 		if selection != nil {
 			execOpts.ExecutionLifecycle = selection
-			if selection.CanonicalSessionID != "" {
-				meta := make(map[string]any, len(execOpts.Metadata)+2)
-				for k, v := range execOpts.Metadata {
-					meta[k] = v
-				}
-				meta[cliproxyexecutor.CanonicalSessionIDMetadataKey] = selection.CanonicalSessionID
-				if selection.ParentSessionID != "" && selection.ParentSessionID != selection.CanonicalSessionID {
-					meta[cliproxyexecutor.ParentSessionIDMetadataKey] = selection.ParentSessionID
-				} else {
-					delete(meta, cliproxyexecutor.ParentSessionIDMetadataKey)
-				}
-				execOpts.Metadata = meta
+			if selection.CanonicalSessionID != "" || selection.lcpAffinitySessionID != "" {
+				execOpts.Metadata = applyHomeSelectionSessionMetadata(execOpts.Metadata, selection)
 			}
 		} else if pickOpts.Metadata != nil {
 			if canonicalID, ok := pickOpts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey]; ok {
@@ -2840,24 +2836,41 @@ func mergeHomePreparedSnapshot(base, current, prepared *Auth) *Auth {
 }
 
 // prepareHomeRequestAuth prepares a dispatch auth without reading or updating local auth state.
-func (m *Manager) prepareHomeRequestAuth(ctx context.Context, executor ProviderExecutor, selection *HomeDispatchSelection) (*Auth, error) {
+func (m *Manager) prepareHomeRequestAuth(ctx context.Context, selection *HomeDispatchSelection, upstreamModel string) (*Auth, error) {
 	if selection == nil {
 		return nil, nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, homeAuthPreparationModelKey{}, canonicalModelKey(upstreamModel))
 	auth := selection.CloneAuth()
-	prepared, errPrepare := m.prepareHomeAuthSnapshot(ctx, executor, auth)
+	credentialExecutor := selection.Executor
+	if selection.ExecutorPlugin != "" {
+		credentialExecutor = selection.authExecutor
+	}
+	prepared, errPrepare := m.prepareHomeAuthSnapshot(ctx, credentialExecutor, auth, selection.ExecutorPlugin != "")
 	if errPrepare != nil {
 		warnLogHomeCredentialFailure(ctx, "request_auth_preparation", selection.Provider, auth, errPrepare)
+	} else if selection.ExecutorPlugin != "" && prepared != auth {
+		preserveHomeRoutingAttributes(prepared, auth)
 	}
 	return prepared, errPrepare
 }
 
-func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor ProviderExecutor, auth *Auth) (*Auth, error) {
+func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor ProviderExecutor, auth *Auth, delegated bool) (*Auth, error) {
 	if m == nil || executor == nil || auth == nil {
 		return auth, nil
 	}
 	preparer, ok := executor.(RequestAuthPreparer)
-	if !ok || preparer == nil || !preparer.ShouldPrepareRequestAuth(auth) {
+	if !ok || preparer == nil {
+		return auth, nil
+	}
+	shouldPrepare := preparer.ShouldPrepareRequestAuth
+	if providerPreparer, okProvider := preparer.(HomePluginRequestAuthPreparer); delegated && okProvider {
+		shouldPrepare = providerPreparer.ShouldPrepareHomePluginRequestAuth
+	}
+	if !shouldPrepare(auth) {
 		return auth, nil
 	}
 	if ctx == nil {
@@ -2869,7 +2882,7 @@ func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor Provider
 
 	prepareDirect := func(callCtx context.Context) (*Auth, error) {
 		target := auth.Clone()
-		if !preparer.ShouldPrepareRequestAuth(target) {
+		if !shouldPrepare(target) {
 			return target, nil
 		}
 		updated, errPrepare := preparer.PrepareRequestAuth(callCtx, target)
@@ -2929,7 +2942,7 @@ func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor Provider
 				close(flight.done)
 			}()
 
-			if !preparer.ShouldPrepareRequestAuth(snapshot) {
+			if !shouldPrepare(snapshot) {
 				flight.result = snapshot
 				return
 			}

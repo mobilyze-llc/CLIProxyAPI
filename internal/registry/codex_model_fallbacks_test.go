@@ -44,6 +44,9 @@ func TestCodexPaidModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 	if got := GetClaudeModels()[0].DisplayName; got != "Remote Claude" {
 		t.Fatalf("Claude display name = %q, want remote change", got)
 	}
+	if model := LookupStaticModelInfoByChannel("gpt-6.2-astra", "codex"); model == nil {
+		t.Fatal("Codex channel lookup omitted the Astra fallback")
+	}
 	tiers := map[string][]*ModelInfo{
 		"free": GetCodexFreeModels(),
 		"team": GetCodexTeamModels(),
