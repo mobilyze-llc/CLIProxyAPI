@@ -115,6 +115,7 @@ func TestHomeExecutorDispatchLifecycleRejections(t *testing.T) {
 	for _, operation := range []string{"execute", "stream", "count"} {
 		for _, event := range []string{"reload-same-version", "rpc-quiesced", "client-closed"} {
 			t.Run(operation+"/"+event, func(t *testing.T) {
+				ctx := coreusage.WithTraceID(t.Context(), t.Name())
 				var oldCalls, newCalls atomic.Int32
 				previous := newHomeLifecycleClient(func(method string) ([]byte, error) {
 					switch method {
@@ -174,11 +175,11 @@ func TestHomeExecutorDispatchLifecycleRejections(t *testing.T) {
 				var errExecute error
 				switch operation {
 				case "execute":
-					_, errExecute = manager.Execute(t.Context(), []string{"home"}, req, opts)
+					_, errExecute = manager.Execute(ctx, []string{"home"}, req, opts)
 				case "stream":
-					_, errExecute = manager.ExecuteStream(t.Context(), []string{"home"}, req, opts)
+					_, errExecute = manager.ExecuteStream(ctx, []string{"home"}, req, opts)
 				case "count":
-					_, errExecute = manager.ExecuteCount(t.Context(), []string{"home"}, req, opts)
+					_, errExecute = manager.ExecuteCount(ctx, []string{"home"}, req, opts)
 				}
 				assertHomeExecutorUnavailable(t, errExecute)
 				var wantOldCalls int32
@@ -202,7 +203,7 @@ func TestHomeExecutorDispatchLifecycleRejections(t *testing.T) {
 					if record.Provider == t.Name() {
 						break
 					}
-					if record.AuthID == homePluginAuth {
+					if record.TraceID == t.Name() && record.AuthID == homePluginAuth {
 						t.Errorf("unexpected account usage from lifecycle rejection: %+v", record)
 					}
 				}
