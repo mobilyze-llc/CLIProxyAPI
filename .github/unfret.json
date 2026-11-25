@@ -1,3 +1,15 @@
 {
-  "wait_for": ["go", "e2e-hermetic"]
+  "wait_for": ["go", "e2e-hermetic"],
+  "fork": {
+    "upstream": "router-for-me/CLIProxyAPI",
+    "owned": [
+      ".github/",
+      ".mergify.yml",
+      ".agents/",
+      "e2e/",
+      "scripts/mob/",
+      "MOBILYZE.md"
+    ],
+    "ignore_tests": ["*_test.go", "testdata/"]
+  }
 }
