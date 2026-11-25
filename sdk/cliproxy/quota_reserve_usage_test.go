@@ -51,18 +51,34 @@ func TestQuotaReservePartialClaudeUsageDoesNotRestoreEligibility(t *testing.T) {
 						}
 						body = []byte(fmt.Sprintf(`{%q:%s}`, other, low))
 					}
+					before, _ := manager.GetByID("protected")
+					prefix := "Anthropic-Ratelimit-Unified-5h-"
+					if limiting == "seven_day" {
+						prefix = "Anthropic-Ratelimit-Unified-7d-"
+					}
+					beforeLimiting := map[string]string{}
+					for key, val := range before.Quota.Signals {
+						if strings.HasPrefix(key, prefix) {
+							beforeLimiting[key] = val
+						}
+					}
 					if !manager.ObserveQuotaHeaders("protected", helps.ParseClaudeUsageHeaders(body)) {
 						t.Fatal("usage response was not observed")
 					}
 					if window == partial.window {
 						observed, _ := manager.GetByID("protected")
-						prefix := "Anthropic-Ratelimit-Unified-5h-"
-						if limiting == "seven_day" {
-							prefix = "Anthropic-Ratelimit-Unified-7d-"
-						}
-						for key := range observed.Quota.Signals {
+						afterLimiting := map[string]string{}
+						for key, val := range observed.Quota.Signals {
 							if strings.HasPrefix(key, prefix) {
-								t.Fatalf("incomplete usage window entered ordinary snapshot: %s", key)
+								afterLimiting[key] = val
+							}
+						}
+						if len(beforeLimiting) == 0 && len(afterLimiting) > 0 {
+							t.Fatalf("incomplete usage window entered ordinary snapshot: %v", afterLimiting)
+						}
+						for key, want := range beforeLimiting {
+							if got := afterLimiting[key]; got != want {
+								t.Fatalf("partial usage window overwrote prior complete snapshot %s: got %q, want %q", key, got, want)
 							}
 						}
 					}

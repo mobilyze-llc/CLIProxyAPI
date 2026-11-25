@@ -2904,6 +2904,9 @@ func (m *Manager) HasAlternativeTargetForModel(ctx context.Context, providers []
 		if !eligibility.allows(candidate) {
 			continue
 		}
+		if m.quotaReserveReached(candidate, time.Now()) {
+			continue
+		}
 		providerKey := canonicalSchedulingProvider(executorKeyFromAuth(candidate))
 		if providerKey == "" {
 			continue

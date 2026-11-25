@@ -178,6 +178,15 @@ func TestCodexClientModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 	if err := ValidateCodexClientModelsJSON(snapshot); err != nil {
 		t.Fatalf("merged snapshot invalid: %v", err)
 	}
+	if !CodexClientModelUsesResponsesLite("gpt-6.2-sol") {
+		t.Fatal("CodexClientModelUsesResponsesLite omitted merged fallback gpt-6.2-sol")
+	}
+	for _, slug := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		levels := CodexClientModelThinkingLevels(slug)
+		if !slices.Contains(levels, "ultra") {
+			t.Fatalf("CodexClientModelThinkingLevels(%q) = %v, want fallback levels including ultra", slug, levels)
+		}
+	}
 
 	upstreamSol := testCodexClientModel("gpt-6.2-sol", 1)
 	upstreamSol["description"] = "Upstream Sol"

@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
 func reserveHeaders(signals map[string]string) http.Header {
@@ -174,5 +177,136 @@ func TestQuotaReserveHistoryCodexInactiveSecondary(t *testing.T) {
 		if manager.quotaReserveReached(auth, now.Add(2*time.Minute)) {
 			t.Fatalf("inactive secondary with relative reset %q survived as a phantom block", relativeReset)
 		}
+	}
+}
+
+func TestHasAlternativeTargetForModelExcludesReservedCredentials(t *testing.T) {
+	ctx := WithSkipPersist(context.Background())
+	now := time.Now()
+	manager := NewManager(nil, &SoonestResetSelector{}, nil)
+	manager.SetConfig(reserveTestConfig("codex"))
+	manager.RegisterExecutor(schedulerTestExecutor{provider: "codex"})
+	primary := reserveTestAuth("codex", "primary", "other@example.com", 10, 10, now.Add(time.Hour))
+	reserved := reserveTestAuth("codex", "reserved", "personal@example.com", 95, 10, now.Add(time.Hour))
+	if _, err := manager.Register(ctx, primary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Register(ctx, reserved); err != nil {
+		t.Fatal(err)
+	}
+	if manager.HasAlternativeTargetForModel(ctx, []string{"codex"}, "", cliproxyexecutor.Options{}, "primary") {
+		t.Fatal("HasAlternativeTargetForModel treated a quota-reserved credential as an available failover target")
+	}
+	available := reserveTestAuth("codex", "available", "third@example.com", 10, 10, now.Add(time.Hour))
+	if _, err := manager.Register(ctx, available); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.HasAlternativeTargetForModel(ctx, []string{"codex"}, "", cliproxyexecutor.Options{}, "primary") {
+		t.Fatal("HasAlternativeTargetForModel missed an unreserved failover target")
+	}
+}
+
+func TestCredentialLevelFailurePreservesQuotaReserveHistory(t *testing.T) {
+	ctx := WithSkipPersist(context.Background())
+	now := time.Now().Truncate(time.Second)
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(reserveTestConfig("codex"))
+	auth := reserveTestAuth("codex", "protected", "personal@example.com", 95, 10, now.Add(time.Hour))
+	auth.Quota.ObservedAt = now
+	auth.Quota.ObserveResponseHeadersForProvider("codex", reserveHeaders(auth.Quota.Signals), now)
+	auth.ModelStates = map[string]*ModelState{"gpt-6.2-sol": {Status: StatusActive}}
+	if _, err := manager.Register(ctx, auth); err != nil {
+		t.Fatal(err)
+	}
+	primaryOnly := reserveHeaders(codexWindowSignals("Primary", weeklyWindowMinutes, 10, now.Add(time.Hour)))
+	markCtx := internallogging.WithResponseHeadersHolder(ctx)
+	internallogging.SetResponseHeaders(markCtx, primaryOnly)
+	manager.MarkResult(markCtx, Result{
+		AuthID:          "protected",
+		Provider:        "codex",
+		CredentialScope: true,
+		Success:         false,
+		Error:           &Error{HTTPStatus: http.StatusInternalServerError, Message: "transient"},
+	})
+	after, _ := manager.GetByID("protected")
+	if !manager.quotaReserveReached(after, now.Add(time.Minute)) {
+		t.Fatal("credential-scoped failure erased retained secondary reserve window")
+	}
+}
+
+func TestRefreshWithOlderNonZeroObservationDoesNotRollBackReserveEvidence(t *testing.T) {
+	ctx := WithSkipPersist(context.Background())
+	now := time.Now().Truncate(time.Second)
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(reserveTestConfig("codex"))
+	initial := reserveTestAuth("codex", "protected", "personal@example.com", 10, 10, now.Add(time.Hour))
+	initial.Quota.ObservedAt = now
+	initial.Quota.ObserveResponseHeadersForProvider("codex", reserveHeaders(initial.Quota.Signals), now)
+	if _, err := manager.Register(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+	refreshSnapshot, _ := manager.GetByID("protected")
+	high := reserveTestAuth("codex", "source", "", 95, 10, now.Add(time.Hour))
+	manager.ObserveQuotaHeadersAt("protected", reserveHeaders(high.Quota.Signals), now.Add(time.Minute))
+	refreshSnapshot.Metadata["access_token"] = "refreshed-token"
+	if _, err := manager.Update(ctx, refreshSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := manager.GetByID("protected")
+	if !manager.quotaReserveReached(after, now.Add(2*time.Minute)) {
+		t.Fatal("in-flight refresh with older ObservedAt rolled back newer reserve evidence")
+	}
+	if !after.Quota.ObservedAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("ObservedAt = %v, want %v", after.Quota.ObservedAt, now.Add(time.Minute))
+	}
+}
+
+func TestSlowUsageReadAndPartialPollsPreserveNewerAndOtherWindows(t *testing.T) {
+	ctx := WithSkipPersist(context.Background())
+	now := time.Now().Truncate(time.Second)
+	manager := NewManager(nil, nil, nil)
+	manager.SetConfig(reserveTestConfig("claude"))
+	auth := reserveTestAuth("claude", "protected", "personal@example.com", 10, 10, now.Add(time.Hour))
+	if _, err := manager.Register(ctx, auth); err != nil {
+		t.Fatal(err)
+	}
+	high := reserveTestAuth("claude", "source", "", 90, 60, now.Add(2*time.Hour))
+	manager.ObserveQuotaHeadersAt("protected", reserveHeaders(high.Quota.Signals), now.Add(2*time.Minute))
+	staleLow := reserveTestAuth("claude", "source", "", 10, 10, now.Add(time.Hour))
+	manager.ObserveQuotaHeadersAt("protected", reserveHeaders(staleLow.Quota.Signals), now.Add(time.Minute))
+	afterStale, _ := manager.GetByID("protected")
+	if !manager.quotaReserveReached(afterStale, now.Add(3*time.Minute)) {
+		t.Fatal("slow usage read stamped at read start rolled back newer reserve window")
+	}
+	if got := afterStale.Quota.Signals["Anthropic-Ratelimit-Unified-5h-Utilization"]; got != "0.9" {
+		t.Fatalf("slow usage read rolled back 5h signal to %q, want 0.9", got)
+	}
+	partial5hOnly := http.Header{
+		"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.2"},
+		"Anthropic-Ratelimit-Unified-5h-Reset":       {unixString(now.Add(3 * time.Hour))},
+		"Anthropic-Ratelimit-Unified-7d-Utilization": {"0.7"},
+	}
+	manager.ObserveQuotaHeadersAt("protected", partial5hOnly, now.Add(4*time.Minute))
+	afterPartial, _ := manager.GetByID("protected")
+	if got := afterPartial.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Reset"]; got != unixString(now.Add(2*time.Hour)) {
+		t.Fatalf("partial Claude poll erased prior 7d reset: got %q, want %q", got, unixString(now.Add(2*time.Hour)))
+	}
+	if got := afterPartial.Quota.Signals["Anthropic-Ratelimit-Unified-5h-Utilization"]; got != "0.2" {
+		t.Fatalf("complete 5h window in partial poll did not update: got %q, want 0.2", got)
+	}
+
+	codex := reserveTestAuth("codex", "codex-partial", "other@example.com", 30, 40, now.Add(2*time.Hour))
+	if _, err := manager.Register(ctx, codex); err != nil {
+		t.Fatal(err)
+	}
+	manager.ObserveQuotaHeadersAt("codex-partial", reserveHeaders(codex.Quota.Signals), now.Add(time.Minute))
+	codexPrimaryOnly := reserveHeaders(codexWindowSignals("Primary", weeklyWindowMinutes, 45, now.Add(3*time.Hour)))
+	manager.ObserveQuotaHeadersAt("codex-partial", codexPrimaryOnly, now.Add(2*time.Minute))
+	afterCodex, _ := manager.GetByID("codex-partial")
+	if got := afterCodex.Quota.Signals["X-Codex-Secondary-Reset-At"]; got != unixString(now.Add(2*time.Hour)) {
+		t.Fatalf("partial Codex poll erased prior secondary window: got %q", got)
+	}
+	if got := afterCodex.Quota.Signals["X-Codex-Primary-Used-Percent"]; got != "45" {
+		t.Fatalf("complete primary window in Codex poll did not update: got %q, want 45", got)
 	}
 }

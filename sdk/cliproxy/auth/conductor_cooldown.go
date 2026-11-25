@@ -2372,8 +2372,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						}
 						auth.NextRetryAfter = authOwnRetry
 						auth.Quota = QuotaState{
-							ObservedAt: savedModelAggQuota.ObservedAt,
-							Signals:    maps.Clone(savedModelAggQuota.Signals),
+							ObservedAt:     savedModelAggQuota.ObservedAt,
+							Signals:        maps.Clone(savedModelAggQuota.Signals),
+							ReserveWindows: maps.Clone(savedModelAggQuota.ReserveWindows),
 						}
 					}
 					prevAuthQuotaActive := auth.Quota.Exceeded && auth.Quota.NextRecoverAt.After(now)
@@ -2445,8 +2446,11 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							}
 						}
 						if isolatedModelAgg && !isCloudflareChallengeResultError(result.Error) && !isTOSViolationResultError(result.Error) {
-							savedModelAggQuota.Signals = mergeQuotaObservation(auth.Quota, savedModelAggQuota).Signals
+							merged := mergeQuotaObservation(auth.Quota, savedModelAggQuota)
+							savedModelAggQuota.ObservedAt = merged.ObservedAt
+							savedModelAggQuota.Signals = merged.Signals
 							applyCooldownFields(&auth.Quota, savedModelAggQuota)
+							auth.Quota.ReserveWindows = merged.ReserveWindows
 							updateAggregatedAvailability(auth, now)
 						}
 					}

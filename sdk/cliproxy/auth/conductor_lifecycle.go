@@ -580,7 +580,7 @@ func (m *Manager) updateInternalLockedWithOptions(ctx context.Context, base, aut
 			auth.nonAuthCredentialLastError = cloneError(existing.nonAuthCredentialLastError)
 			auth.nonQuotaCooldownUntil = existing.nonQuotaCooldownUntil
 			auth.forceCooldownSeeded = existing.forceCooldownSeeded
-		} else if auth.Quota.ObservedAt.IsZero() {
+		} else {
 			auth.Quota = mergeQuotaObservation(auth.Quota, existing.Quota)
 		}
 		clearedAuthGrantRetry := false

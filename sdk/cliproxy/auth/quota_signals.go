@@ -57,8 +57,15 @@ func (q *QuotaState) observeHeaders(provider string, headers http.Header, observ
 		q.observeReserveWindows(provider, q.Signals, q.ObservedAt)
 	}
 	q.observeReserveWindows(provider, next, observedAt)
-	if usageRead && strings.EqualFold(strings.TrimSpace(provider), "claude") {
-		next = completeClaudeUsageSignals(next)
+	if observedAt.Before(q.ObservedAt) {
+		return true
+	}
+	if usageRead {
+		if merged, ok := mergeCompleteUsageSignals(provider, q.Signals, next); ok {
+			q.Signals = merged
+			q.ObservedAt = observedAt
+		}
+		return true
 	}
 	if len(next) > 0 {
 		q.Signals = next
@@ -68,17 +75,22 @@ func (q *QuotaState) observeHeaders(provider string, headers http.Header, observ
 }
 
 // ObserveQuotaHeaders records a usage-endpoint observation on the registered
-// credential. Partial windows update reserve evidence; only complete Claude
-// windows replace the ordinary routing snapshot. It leaves counters, availability,
-// cooldown fields and the auth record on disk unchanged. No quota signals leaves
-// both observations unchanged.
+// credential using the current time as the observation timestamp.
 func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
+	return m.ObserveQuotaHeadersAt(authID, headers, time.Now())
+}
+
+// ObserveQuotaHeadersAt records a usage-endpoint observation captured at observedAt
+// on the registered credential. Partial windows update reserve evidence; only complete
+// windows update their corresponding window in the ordinary routing snapshot, and an
+// observation older than the recorded timestamp never rolls back newer signals.
+func (m *Manager) ObserveQuotaHeadersAt(authID string, headers http.Header, observedAt time.Time) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.Lock()
 	auth := m.auths[authID]
-	observed := auth != nil && auth.Quota.observeHeaders(auth.Provider, headers, time.Now(), true)
+	observed := auth != nil && auth.Quota.observeHeaders(auth.Provider, headers, observedAt, true)
 	m.mu.Unlock()
 	if observed {
 		m.persistCooldownStates(context.Background())
@@ -86,17 +98,64 @@ func (m *Manager) ObserveQuotaHeaders(authID string, headers http.Header) bool {
 	return observed
 }
 
-func completeClaudeUsageSignals(signals map[string]string) map[string]string {
-	complete := make(map[string]string, 4)
-	for _, name := range []string{"5h", "7d"} {
-		prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
-		usage, reset := prefix+"Utilization", prefix+"Reset"
-		if signals[usage] != "" && signals[reset] != "" {
-			complete[usage] = signals[usage]
-			complete[reset] = signals[reset]
+func mergeCompleteUsageSignals(provider string, existing, incoming map[string]string) (map[string]string, bool) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	merged := maps.Clone(existing)
+	if merged == nil {
+		merged = make(map[string]string, len(incoming))
+	}
+	updated := false
+	switch provider {
+	case "claude":
+		for _, name := range []string{"5h", "7d"} {
+			prefix := "Anthropic-Ratelimit-Unified-" + name + "-"
+			usage, reset := prefix+"Utilization", prefix+"Reset"
+			if incoming[usage] != "" && incoming[reset] != "" {
+				deletePrefix(merged, prefix)
+				merged[usage] = incoming[usage]
+				merged[reset] = incoming[reset]
+				updated = true
+			}
+		}
+	case "codex":
+		for _, name := range []string{"Primary", "Secondary"} {
+			prefix := "X-Codex-" + name + "-"
+			hasUsage := incoming[prefix+"Used-Percent"] != ""
+			hasReset := incoming[prefix+"Reset-At"] != "" || incoming[prefix+"Reset-After-Seconds"] != ""
+			existingHasReset := existing[prefix+"Reset-At"] != "" || existing[prefix+"Reset-After-Seconds"] != ""
+			if hasUsage && (hasReset || !existingHasReset) {
+				deletePrefix(merged, prefix)
+				for key, value := range incoming {
+					if strings.HasPrefix(key, prefix) {
+						merged[key] = value
+					}
+				}
+				updated = true
+			}
+		}
+		if updated {
+			if limitReached, ok := incoming["X-Codex-Limit-Reached"]; ok {
+				merged["X-Codex-Limit-Reached"] = limitReached
+			}
+		}
+	default:
+		if len(incoming) == 0 {
+			return nil, false
+		}
+		return incoming, true
+	}
+	if !updated {
+		return nil, false
+	}
+	return merged, true
+}
+
+func deletePrefix(signals map[string]string, prefix string) {
+	for key := range signals {
+		if strings.HasPrefix(key, prefix) {
+			delete(signals, key)
 		}
 	}
-	return complete
 }
 
 // ClearObservationSignals removes only passive observation data. It leaves

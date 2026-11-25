@@ -90,12 +90,16 @@ func CodexClientModelThinkingLevels(slug string) []string {
 }
 
 func loadCodexClientModelsFromBytes(data []byte, source string) (bool, error) {
-	responsesLiteMap, thinkingLevelsMap, err := parseAndValidateCodexClientModelsJSON(data)
-	if err != nil {
+	if _, _, err := parseAndValidateCodexClientModelsJSON(data); err != nil {
 		return false, fmt.Errorf("%s: %w", source, err)
 	}
 
 	merged, err := withCodexClientModelFallbacks(data)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", source, err)
+	}
+
+	responsesLiteMap, thinkingLevelsMap, err := parseAndValidateCodexClientModelsJSON(merged)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", source, err)
 	}
