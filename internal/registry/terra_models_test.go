@@ -12,15 +12,21 @@ func TestCodexCatalogsIncludeTerraWhenRemoteCatalogLags(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			for _, model := range getModels() {
 				if model.ID == "gpt-6.1-terra" {
-					if model.ContextLength != 500000 || len(model.Thinking.Levels) != 6 {
-						t.Fatalf("unexpected Terra capabilities: %+v", model)
-					}
 					return
 				}
 			}
 			t.Fatal("Terra is absent from the Codex model catalog")
 		})
 	}
+	for _, model := range WithCodexBuiltins(nil) {
+		if model.ID == "gpt-6.1-terra" {
+			if model.ContextLength != 500000 || model.Thinking == nil || len(model.Thinking.Levels) != 6 {
+				t.Fatalf("unexpected Terra fallback capabilities: %+v", model)
+			}
+			return
+		}
+	}
+	t.Fatal("Terra is absent when the remote catalog lags")
 }
 
 func TestCodexTerraPreservesNewerRemoteMetadata(t *testing.T) {

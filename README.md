@@ -16,11 +16,11 @@ You can access the following providers locally and with multiple CLI accounts th
     </tr>
     <tr>
         <td align="center"><a href="https://www.kimi.com/code/?aff=cliproxyapi"><img src="./assets/logo/kimi.svg" alt="Kimi" width="28" height="28" /></a></td>
-        <td>Kimi series models (Kimi K3, K2.8 Preview, etc.). <a href="https://platform.kimi.ai/docs/guide/kimi-k3-quickstart">Kimi K3</a> is Moonshot AI’s most capable model and the world’s first open 3T-class model. With 2.8 trillion parameters, native vision, and a 1-million-token context window, K3 is built for long-horizon coding, knowledge work, and reasoning. CLIProxyAPI supports Kimi through OAuth or compatible API interfaces. Try a <strong>Kimi Code plan</strong> (<a href="https://www.kimi.com/code?aff=cliproxyapi">中文站</a> | <a href="https://www.kimi.ai/code?aff=cliproxyapi">Global</a>), or get an <strong>API key</strong> from the Kimi Open Platform (<a href="https://platform.kimi.com?track_id=track-f15622e7182046baa22ca35e006e13a7&aff=cliproxyapi">中文站</a> | <a href="https://platform.kimi.ai?track_id=track-8a28e4b291d84f62af2fccc3e7a21cb3&aff=cliproxyapi">Global</a>). Thanks to Kimi for supporting CLIProxyAPI and the open-source community!</td>
+        <td>Kimi series models (Kimi K3.1 Pro, K3.1 Pro Highspeed, K3, K2.8 Preview, etc.). <a href="https://platform.kimi.ai/docs/guide/kimi-k3-quickstart">Kimi K3</a> is Moonshot AI’s previous-generation flagship and the world’s first open 3T-class model. With 2.8 trillion parameters, native vision, and a 1-million-token context window, K3 is built for long-horizon coding, knowledge work, and reasoning. CLIProxyAPI supports Kimi through OAuth or compatible API interfaces. Try a <strong>Kimi Code plan</strong> (<a href="https://www.kimi.com/code?aff=cliproxyapi">中文站</a> | <a href="https://www.kimi.ai/code?aff=cliproxyapi">Global</a>), or get an <strong>API key</strong> from the Kimi Open Platform (<a href="https://platform.kimi.com?track_id=track-f15622e7182046baa22ca35e006e13a7&aff=cliproxyapi">中文站</a> | <a href="https://platform.kimi.ai?track_id=track-8a28e4b291d84f62af2fccc3e7a21cb3&aff=cliproxyapi">Global</a>). Thanks to Kimi for supporting CLIProxyAPI and the open-source community!</td>
     </tr>
     <tr>
         <td align="center"><a href="https://developers.openai.com/api/docs/models"><img src="./assets/logo/openai.svg" alt="OpenAI" width="28" height="28" /></a></td>
-        <td>OpenAI GPT-6 models (GPT-6 Astra, GPT-6.1 Sol, GPT-6 Luna), including access through Codex OAuth. Astra is the flagship for complex reasoning and coding, Sol balances capability and cost, and Luna handles focused, high-volume work.</td>
+        <td>OpenAI GPT-6 models (GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Luna), including access through Codex OAuth. Astra is the flagship for complex reasoning and coding, Sol balances capability and cost, Terra focuses on visual reasoning and computer use, and Luna handles focused, high-volume work.</td>
     </tr>
     <tr>
         <td align="center"><a href="https://www.anthropic.com/claude/fable"><img src="./assets/logo/claude.svg" alt="Anthropic" width="28" height="28" /></a></td>
@@ -40,7 +40,7 @@ You can access the following providers locally and with multiple CLI accounts th
     </tr>
     <tr>
         <td align="center"><a href="https://devin.ai/cli">Devin</a></td>
-        <td>Devin models (SWE-2, GPT-6 Astra, Claude Fable 5.1, etc.). Connect a Devin account with <code>--devin-login</code> to route the models available to that account.</td>
+        <td>Devin models (SWE-2, SWE-2 Flash, GPT-6 Astra, Claude Fable 5.1, etc.). Connect a Devin account with <code>--devin-login</code> to route the models available to that account.</td>
     </tr>
 </tbody>
 </table>
@@ -69,12 +69,12 @@ PackyCode provides special discounts for our software users: register using <a h
 <td>Thanks to APIKEY.FUN for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI relay platform dedicated to providing stable, efficient, and low-cost AI model API access for enterprises and individual developers. The platform supports popular mainstream models such as Claude, OpenAI, and Gemini, with prices as low as 7% of the official price. Register through this project's <a href="https://apikey.fan/register?aff=CLIProxyAPI">exclusive link</a> to enjoy a special <b>permanent 5% top-up discount</b>.</td>
 </tr>
 <tr>
-<td width="180"><a href="https://api.fenno.ai/s/Cvf0"><img src="./assets/fennoai.png" alt="FennoAI" width="150"></a></td>
-<td>FennoAI is a stable and efficient API relay service provider, currently focused on Codex relay services. It is compatible with OpenAI and Anthropic protocols and can flexibly integrate with mainstream coding tools such as Codex, Claude Code, and OpenCode. It can reliably support enterprise-grade demand of hundreds of billions of tokens per day, with B2B settlement and invoicing available for both domestic and overseas entities. FennoAI offers an exclusive benefit for CLIProxyAPI users: purchase a subscription through the <a href="https://api.fenno.ai/s/Cvf0">exclusive link</a> and receive $50 worth of Coding Plan credits for just $1.99. Referral rewards are also available: earn up to 20% commission when invited friends make a purchase. The more friends you invite, the greater the rewards.</td>
+<td width="180"><a href="https://api.fenno.ai/s/9LRu"><img src="./assets/fennoai.png" alt="Fenno.ai" width="150"></a></td>
+<td>Thanks to <strong>Fenno.ai</strong> for sponsoring this project! Fenno.ai is an API relay service for coding, with a focus on Codex. It brings coding models such as GPT, Claude, and Grok together under one API key, supports both OpenAI and Anthropic protocols, and works directly with popular coding tools such as Codex, Claude Code, Cline, and OpenCode. It supports B2B settlement and invoicing for entities in China and abroad. <strong>New users can <a href="https://api.fenno.ai/s/9LRu">try $50 in credits for $1.99</a>. Earn up to 20% referral commission: the more friends you refer, the more you can earn.</strong></td>
 </tr>
 <tr>
 <td width="180"><a href="https://s.qiniu.com/7zUJri"><img src="./assets/qiniucloud.png" alt="Qiniu Cloud AI" width="150"></a></td>
-<td>Thanks to <a href="https://s.qiniu.com/7zUJri">Qiniu Cloud AI</a> for sponsoring this project! Qiniu Cloud AI is an enterprise-grade large-model MaaS platform under Qiniu Cloud (02567.HK). It provides one-stop access to 150+ mainstream global models, is compatible with protocols from major global model providers, and covers full-modal processing capabilities for text, image, audio, video, and files. It serves more than 1.69 million enterprise and developer users. Exclusive benefits: enterprise users can claim 12 million free tokens, and invite friends to earn up to tens of billions of tokens.</td>
+<td>Thanks to <strong>Qiniu Cloud</strong> for sponsoring this project! Qiniu Cloud (02567.HK) operates an enterprise-grade MaaS platform that provides one-stop access to 150+ leading global models. It supports protocols from major model providers and processes text, images, audio, video, and files, serving more than 1.8 million enterprise developers. <strong>New enterprise users can claim 20 million free tokens. As part of the year-end promotion, new users can <a href="https://www.qiniu.com/ai/free-models/conatus-2026?utm_source=CLIProxyAPI&amp;utm_medium=oss&amp;utm_campaign=comatus_202611&amp;utm_content=readme">get up to 1 billion free tokens per day</a>.</strong></td>
 </tr>
 <tr>
 <td width="180"><a href="https://cubence.com/signup?code=CLIPROXYAPI&source=cpa"><img src="./assets/cubence.png" alt="Cubence" width="150"></a></td>
@@ -89,20 +89,8 @@ PackyCode provides special discounts for our software users: register using <a h
 <td>Swiftproxy provides 90M+ clean residential IPs across 220+ locations, supporting HTTP(S)/SOCKS5, IP rotation, Sticky Sessions, and precise location targeting. It helps AI API tools and automation workflows access online services reliably from different locations, making it ideal for API requests, web access, data collection, and location-based testing. Residential proxies from &#36;0.7/GB. Free testing is available, with 10% off using code PROXY90. <a href="https://www.swiftproxy.net/?code=PR67S9A95">Try Swiftproxy Now</a></td>
 </tr>
 <tr>
-<td width="180"><a href="https://www.rapidproxy.io/?code=KHM9B6E6M"><img src="./assets/rapidproxy.png" alt="RapidProxy" width="150"></a></td>
-<td><a href="https://www.rapidproxy.io/?code=KHM9B6E6M">RapidProxy</a> is a high-performance proxy provider built for automation and multi-account operations, offering clean residential proxies and native static ISP IPs. With 90M+ residential IPs worldwide, smart rotation, stable sessions, and high-concurrency support, RapidProxy is ideal for web scraping, browser automation, social media account management, e-commerce operations, bulk account registration, and more. Residential proxies start at just &#36;0.55/GB, with traffic that never expires. Use code RAPID10 for 10% off, and <a href="https://www.rapidproxy.io/?code=KHM9B6E6M">start your free trial today.</a></td>
-</tr>
-<tr>
 <td width="180"><a href="https://pateway.ai/?ch=jjvdb"><img src="./assets/patewayai.png" alt="PatewayAI" width="150"></a></td>
 <td>PatewayAI is an API relay service provider for experienced AI developers, with full support for the Claude and Codex model families. All models come from high-quality official channels, with no dilution or counterfeiting, and transparent, verifiable billing details. Economy mode starts at just 5% of the official price. Register through <a href="https://pateway.ai/?ch=jjvdb">this link</a> to receive trial credits and participate in occasional promotions for free credits. The platform also supports enterprise-grade concurrency, a dedicated management dashboard, formal contracts and invoices, and two-way referral rewards of up to &#36;150.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.openlux.ai/register?channel=c_6axb1q5n"><img src="./assets/openlux.png" alt="OpenLux" width="150"></a></td>
-<td>Thank you to OpenLux for sponsoring this project!<br><br>OpenLux is an all-in-one AI platform for businesses, bringing together leading AI models from major providers worldwide. With fast, reliable service and responsive technical support, OpenLux offers base pricing for Claude, OpenAI, and Gemini models as low as 8.82%, 4%, and 8% of official rates, respectively.<br><br>Exclusive offer for CLI Proxy API users: Sign up through our referral link and enjoy up to 7.5% off credit top-ups!<br><br>Get started with OpenLux → <a href="https://www.openlux.ai/register?channel=c_6axb1q5n">https://www.openlux.ai/register?channel=c_6axb1q5n</a></td>
-</tr>
-<tr>
-<td width="180"><a href="https://modelflare.dev/sign-up?utm_source=github&utm_campaign=cliproxyapi"><img src="./assets/modelflare.png" alt="Modelflare" width="150"></a></td>
-<td>Thanks to Modelflare for sponsoring this project! Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost. Operated by US-based Havenbyte LLC, Modelflare supports GPT, Claude, Gemini, Grok, and other leading models through common compatible protocols, plus 40+ image and video models. Cache compensation is a highlight: selected OpenAI groups (price-first, stable, and premium) guarantee daily cache hit rates of 65%, 75%, or 85%, and if eligible requests fall short, Modelflare refunds the difference, visible on the usage dashboard after settlement. Special offers: a single top-up of US&#36;20 unlocks the GPT discount group at a 0.015x price multiplier, and a single top-up of US&#36;50 unlocks the Claude discount group at a 0.03x multiplier. Register via <a href="https://modelflare.dev/sign-up?utm_source=github&utm_campaign=cliproxyapi">this exclusive link</a> to get started.</td>
 </tr>
 <tr>
 <td width="180"><a href="https://kedaya.ai/register?aff=824X8RAHCYXM"><img src="./assets/kedaya.jpg" alt="kedaya.ai" width="150"></a></td>
@@ -110,12 +98,50 @@ PackyCode provides special discounts for our software users: register using <a h
 </tr>
 <tr>
 <td width="180"><a href="https://xcode.best/register?aff=OuDv"><img src="./assets/xcode.gif" alt="Xcode" width="150"></a></td>
-<td>This AI model transfer service provider offers immediate refunds; any user can obtain a free invoice; it can be done for both corporate and individual clients; all major models are available. The customer service is always online and ready to respond to your requests; just let us know what you need and we'll take care of it！！！
-<br><br>Xcode VIP access：<a href="https://xcode.best/register?aff=OuDv">https://xcode.best</a></td>
+<td>
+    🥚 <b>[Freebie Alert!] Register & submit a ticket with code to grab $5 free credit + 15% OFF first top-up!</b><br>
+    🚀 <b>More than just API routing — an all-in-one Web workspace:</b> Enjoy Web chat, AI image generation, video creation, and automated workflows right out of the box without any frontend setup.<br>
+    ⚡ <b>All mainstream models supported:</b> High-speed routing for Claude, GPT, Gemini, DeepSeek, and more.<br>
+    🛡️ <b>Reliable guarantees:</b> Hassle-free refunds | Official invoicing | B2B & individual billing | High-availability customer support ready to help!<br><br>
+    👉 Xcode VIP Portal: <a href="https://xcode.best/register?aff=OuDv">https://xcode.best</a><br>
+    💬 Ticket Code: <code>CLIProxyAPI</code> (Submit a ticket to claim your credits instantly)
+  </td>
 </tr>
 <tr>
 <td width="180"><a href="https://x.com/chenju_ai"><img src="./assets/chenju.png" alt="Chenju" width="150"></a></td>
 <td>Thanks to <a href="https://x.com/chenju_ai">陈局 (Chenju)</a> for sponsoring this project! Probably the only slot here that won't ask you to sign up — no signup link, no promo code. Just raising a glass to the maintainers, because good open source deserves to be paid for. Come shoot the breeze on X: <a href="https://x.com/chenju_ai">@chenju_ai</a></td>
+</tr>
+<tr>
+<td width="180"><a href="https://www.deepsiderapi.com/?utm_source=CLIProxyAPI"><img src="./assets/deepsiderapi.png" alt="DeepSider API" width="150"></a></td>
+<td>Access leading AI models like GPT, Claude, Gemini, and DeepSeek—all in one place. We connect through official channels from major providers, with no shared account pools or reverse engineering. Save up to 71% compared with official rates. Track your usage in real time with transparent billing, and access AI at a lower cost. <a href="https://www.deepsiderapi.com/?utm_source=CLIProxyAPI">Try DeepSider API</a>.</td>
+</tr>
+<tr>
+<td width="180"><a href="https://origincoder.com/"><img src="./assets/origincoder.png" alt="OriginCoder" width="150"></a></td>
+<td><strong><a href="https://origincoder.com">OriginCoder</a> is an enterprise-grade AI gateway designed for low latency, reliability, and high concurrency.</strong> <strong>We build and operate our Claude Max and GPT Pro account pools entirely in-house. Pools that maintain full model performance are priced at 30–40% of official rates, and we publish each pool’s performance status in real time.</strong> Access <strong>GPT, Claude, Grok, Gemini-4-Carbon, DeepSeek, and other leading AI models</strong> through coding tools such as <strong>Claude Code and Codex</strong>. Use it for <strong>AI chat, coding assistance, image generation, and video generation</strong>. We operate overseas in compliance with local regulations and have <strong>served more than 15,000 customers since launching in August 2025</strong>. Our pricing is transparent, with <strong>no overage fees and top-ups starting at CNY 10</strong>. We keep the service running smoothly during peak hours through <strong>24/7 monitoring, redundant account pools, and automatic failover between nodes</strong>. <a href="https://origincoder.com/monitor">Check our service status</a>. <strong>We protect your privacy by not storing conversation content.</strong> We support <strong>business payments and invoicing</strong>. Our support team <strong>responds within 3 minutes</strong>, and our technical team is available <strong>24/7</strong>. Users in mainland China can connect through our <a href="https://cn.origincoder.com">China-optimized gateway</a>.</td>
+</tr>
+<tr>
+<td width="180"><a href="https://visioncoder.cn/"><img src="./assets/visioncoder.svg" alt="VisionCoder" width="150"></a></td>
+<td><strong><a href="https://visioncoder.cn/">VisionCoder</a> | China’s OpenRouter — one API for leading Chinese and global AI models.</strong> Access <strong>DeepSeek, Qwen, Kimi, GLM, GPT, Claude, Gemini, and Grok</strong>, with intelligent routing across suppliers and automatic failover. <strong>Failed requests are free, pricing is public, and every charge can be verified.</strong> Works with coding tools such as Claude Code and Codex, with <strong><a href="https://visioncoder.cn/me/keys">one-click import into CC Switch and WorkBuddy</a></strong>. Teams can purchase centrally, assign subscription packages by seat, and reclaim them for reassignment, with business bank transfers and invoicing supported. <strong>Supplier applications are open: list your model endpoints and earn traffic based on quality. Monthly settlement to business bank accounts, itemized usage records, and customer billing and invoicing handled by VisionCoder.</strong> Join the <a href="https://visioncoder.cn/challenge">VibeCoding Challenge</a> for <strong>CNY 2,350 in top-up credits per round</strong>, including <strong>CNY 1,000 in top-up credits for first place</strong>.</td>
+</tr>
+<tr>
+<td width="180"><a href="https://api.10dianai.com/sign-up?aff=M7Gn"><img src="./assets/10dian-api.png" alt="10dian-API" width="150"></a></td>
+<td><strong>10dian-API</strong><br>One key to call on AI from around the world!<br>10dian-API brings leading AI models and protocols together in one API that works with popular clients. Independent developers, AI enthusiasts, and teams get the same access, including stable connections for high volumes of concurrent requests. Prices are low, billing multipliers are public, and you get the model you choose without substitutions. The service accepts multiple top-up methods and can also pay for popular AI subscriptions on your behalf.<br>👉 <a href="https://api.10dianai.com/sign-up?aff=M7Gn">Sign up</a></td>
+</tr>
+<tr>
+<td width="180"><a href="https://subrouter.ai/register?aff=nP93"><img src="./assets/subrouter-logo.svg" alt="SubRouter" width="150"></a></td>
+<td>
+<strong>SubRouter</strong><br>
+<strong>🚀 All-in-One AI Models — Register &amp; Get 1,000,000 Free Tokens!</strong>
+<p>🎁 Free Trial Offer: <a href="https://subrouter.ai/register?aff=nP93">Sign up now</a> to immediately receive 1,000,000 FREE tokens for testing!</p>
+<ul>
+<li>All Top Models in One Place: Switch freely between Claude, GPT, Gemini, Grok, and DeepSeek with a single API key.</li>
+<li>Smart Routing &amp; Auto-Failover: Intelligent load balancing automatically switches failed nodes to keep your requests running smoothly.</li>
+<li>100% Transparent Billing: Every single API call displays the exact routing path and real-time cost.</li>
+<li>Balance Never Expires: True pay-as-you-go pricing—your credits stay valid forever with no monthly expiration.</li>
+<li>Flexible Top-Ups: Supports USDT, Visa, WeChat Pay, and Alipay.</li>
+</ul>
+👉 Claim Your 1M Free Tokens: <a href="https://subrouter.ai/register?aff=nP93">https://subrouter.ai/register?aff=nP93</a>
+</td>
 </tr>
 </tbody>
 </table>
@@ -143,6 +169,8 @@ PackyCode provides special discounts for our software users: register using <a h
 
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
+[Claude Code with a Codex backend](examples/claude-code-codex/README.md): optional visible progress, classifier routing, image-tool pass-through, and latency diagnostics.
+
 ## Management API
 
 see [MANAGEMENT_API.md](https://help.router-for.me/management/api)
@@ -161,7 +189,7 @@ A self-hosted CLIProxyAPI management console and observability dashboard, availa
 
 ### [Oh-My-CPA](https://github.com/WizisCool/oh-my-cpa)
 
-Modern Ant Design-based management console for CLIProxyAPI v8+, combining CPAMC-style administration with SQLite-backed request records and usage analytics. Covers OAuth accounts, API providers, client keys, quotas, pricing and CPA operations in one interface. Tracks request-level latency, TTFT, tokens and cost, with multi-dimensional filtering, live dashboards and token heatmaps. OpenRouter price sync, custom rates and per-request price snapshots keep historical costs stable; a built-in Agent and MCP tools support assisted investigation and management.
+Web console for CLIProxyAPI v8+, built on `shadcn/ui` with a modern UI/UX, fluid motion, and desktop and mobile layouts. Centralizes providers, OAuth, visual routing, and built-in plugins, with comprehensive request records (latency, TTFT, tokens, diagnostics, and model substitutions), live routing, multi-dimensional pricing analytics, quota window warmup and forecasting, and Agent/MCP tools. Protected by AES-GCM encryption and automatic config backups, supporting direct binary runs, Docker deployment, and one-click OMC/CPA updates.
 
 ## SDK Docs
 
@@ -306,7 +334,19 @@ A Cloudflare-based LLM gateway and proxy server: CLIProxyAPI deployed to Cloudfl
 
 ### [Hermes CLIProxyAPI Provider](https://github.com/duu261/hermes-cliproxyapi-provider)
 
-Model-provider plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent) that registers one Hermes provider per CLIProxyAPI provider, each on the wire its executor accepts (Anthropic Messages, Responses or Chat Completions), with context windows and reasoning levels read from CLIProxyAPI. Optional read-only Management API pass for exact provider grouping. Listed in the [Hermes plugin catalog](https://hermes-agent.nousresearch.com/docs/plugins/cliproxyapi-provider): `hermes plugins install cliproxyapi-provider`.
+Model-provider plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent) that registers one Hermes provider per CLIProxyAPI provider, each on the wire its executor accepts (Anthropic Messages, Responses or Chat Completions), with context windows and reasoning levels read from CLIProxyAPI. Optional read-only Management API pass for exact provider grouping. A companion plugin adds a `/cpa` chat command for each pool's account health and, on request, each account's live quota. Listed in the [Hermes plugin catalog](https://hermes-agent.nousresearch.com/docs/plugins): `hermes plugins install cliproxyapi-provider` and `hermes plugins install cpa-status`.
+
+### [Ebb](https://github.com/lucasnsaraujo/ebb)
+
+Native macOS menu bar app for CLIProxyAPI pools. It shows how much of the pool's Claude, Codex and other providers' 5-hour and weekly limits is left and when it comes back, and sets each login's routing weight through the Management API so the accounts drain evenly.
+
+### [Nia Live Demo](https://github.com/nia-teams/nia-live-demo)
+
+Real-time full-duplex voice companion with a live, interactive SVG/HTML canvas. It combines two CLIProxyAPI capabilities: the Codex GPT-Live 1.1 media relay (`gpt-live-1-codex`, WebRTC + Sideband) for voice with instant barge-in, and `ultrafast` Responses (`gpt-6.1-sol` / `gpt-6-astra`) for drawing and editing the canvas while you talk.
+
+### [Hyphantria](https://hyphantria.com)
+
+Native macOS schematic and PCB design app with AI-assisted component creation, reference-design adoption, and joint placement and routing optimisation. Natively supports CLIProxyAPI for connecting its AI-assisted features to your AI providers.
 
 > [!NOTE]  
 > If you developed a project based on CLIProxyAPI, please open a PR to add it to this list.

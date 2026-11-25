@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -24,7 +25,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -122,7 +122,7 @@ func assertTask6FailedStream(t *testing.T, chunks <-chan cliproxyexecutor.Stream
 	for chunk := range chunks {
 		output = append(output, chunk.Payload...)
 		for _, line := range bytes.Split(chunk.Payload, []byte("\n")) {
-			if bytes.HasPrefix(line, []byte("data:")) && gjson.GetBytes(bytes.TrimSpace(line[5:]), "type").String() == "response.failed" {
+			if bytes.HasPrefix(line, []byte("data:")) && ojson.GetBytes(bytes.TrimSpace(line[5:]), "type").String() == "response.failed" {
 				failed++
 			}
 		}
@@ -133,6 +133,28 @@ func assertTask6FailedStream(t *testing.T, chunks <-chan cliproxyexecutor.Stream
 	}
 	if failed != 1 || errors != 1 || bytes.Contains(output, []byte(`"type":"response.completed"`)) || bytes.Contains(output, []byte("[DONE]")) || bytes.Contains(output, []byte("RAW_SECRET")) || bytes.Contains(output, []byte(`"input":7`)) {
 		t.Fatalf("failure contract: failed=%d errors=%d output=%s", failed, errors, output)
+	}
+}
+
+func assertTask6ZeroOutputStream(t *testing.T, chunks <-chan cliproxyexecutor.StreamChunk) {
+	t.Helper()
+	var output []byte
+	errors := 0
+	for chunk := range chunks {
+		output = append(output, chunk.Payload...)
+		if chunk.Err != nil {
+			errors++
+			status, okStatus := chunk.Err.(interface {
+				StatusCode() int
+				ErrorCode() string
+			})
+			if !okStatus || status.StatusCode() != http.StatusBadGateway || status.ErrorCode() != cliproxyauth.ErrorCodeTransientTransport || chunk.Err.Error() != "upstream stream closed with zero output" {
+				t.Fatalf("expected transient zero-output 502, got %T %v", chunk.Err, chunk.Err)
+			}
+		}
+	}
+	if errors != 1 || len(output) != 0 {
+		t.Fatalf("zero-output stream contract: errors=%d output=%q", errors, output)
 	}
 }
 
@@ -148,7 +170,7 @@ func TestApplyPatchActualProviderErrorAndEOF(t *testing.T) {
 					}
 					name := "apply_patch"
 					if strings.HasPrefix(provider, "claude") {
-						name = gjson.GetBytes(body, "tools.0.name").String()
+						name = ojson.GetBytes(body, "tools.0.name").String()
 					}
 					if mode != "nonstream" {
 						w.Header().Set("Content-Type", "text/event-stream")
@@ -198,7 +220,13 @@ func TestApplyPatchActualProviderErrorAndEOF(t *testing.T) {
 					if errExecuteStream != nil {
 						t.Fatal(errExecuteStream)
 					}
-					assertTask6FailedStream(t, stream.Chunks)
+					// Antigravity rejects HTTP 200 streams with no SSE JSON payload as transient zero-output 502
+					// so Conductor can retry before committing any response payload (#7990).
+					if provider == "antigravity" && mode == "empty" {
+						assertTask6ZeroOutputStream(t, stream.Chunks)
+					} else {
+						assertTask6FailedStream(t, stream.Chunks)
+					}
 				}
 			})
 		}
@@ -448,7 +476,7 @@ func TestApplyPatchHTTPGatewayErrorMatrix(t *testing.T) {
 					name := "apply_patch"
 					actualMode := mode
 					if strings.HasPrefix(provider, "claude") {
-						name = gjson.GetBytes(body, "tools.0.name").String()
+						name = ojson.GetBytes(body, "tools.0.name").String()
 						if mode == "nonstream" {
 							actualMode = "stream"
 						}
@@ -582,7 +610,7 @@ func TestApplyPatchFailureStopsConsumptionAndNextAttemptIsFresh(t *testing.T) {
 		t.Fatal("failed attempt kept consuming the upstream")
 	}
 	response, errExecute := exec.Execute(t.Context(), auth, req, opts)
-	if errExecute != nil || gjson.GetBytes(response.Payload, "output.0.input").String() != "valid patch" {
+	if errExecute != nil || ojson.GetBytes(response.Payload, "output.0.input").String() != "valid patch" {
 		t.Fatalf("next attempt reused failed state: %s %v", response.Payload, errExecute)
 	}
 }
@@ -636,10 +664,10 @@ func TestApplyPatchXAIWebsocketFailureMatrix(t *testing.T) {
 						errors++
 						assertTask6PatchError(t, chunk.Err)
 					}
-					if gjson.GetBytes(chunk.Payload, "type").String() == "response.failed" {
+					if ojson.GetBytes(chunk.Payload, "type").String() == "response.failed" {
 						failed++
 					}
-					if bytes.Contains(chunk.Payload, []byte("RAW_SECRET")) || gjson.GetBytes(chunk.Payload, "type").String() == "response.completed" {
+					if bytes.Contains(chunk.Payload, []byte("RAW_SECRET")) || ojson.GetBytes(chunk.Payload, "type").String() == "response.completed" {
 						t.Fatal("raw WS failure leaked or completed")
 					}
 				}
@@ -700,7 +728,7 @@ func TestApplyPatchDevinLegacyOtherToolsPreserved(t *testing.T) {
 			if custom {
 				key, expectedType = "input", "custom_tool_call"
 			}
-			item := gjson.GetBytes(response.Payload, "output.0")
+			item := ojson.GetBytes(response.Payload, "output.0")
 			if item.Get("type").String() != expectedType || item.Get(key).String() != input {
 				t.Fatalf("legacy provenance changed: %s", response.Payload)
 			}

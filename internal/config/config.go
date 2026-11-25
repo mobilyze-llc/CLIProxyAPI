@@ -25,6 +25,10 @@ type Config struct {
 	// Port is the network port on which the API server will listen.
 	Port int `yaml:"port" json:"-"`
 
+	// ServerID is the stable deployment UUID from server.server-id, or a
+	// process-local identity when the file cannot be written. It is not public JSON.
+	ServerID string `yaml:"-" json:"-"`
+
 	// GitHubToken is the global token for GitHub requests, taking precedence over GITHUB_TOKEN.
 	GitHubToken string `yaml:"github-token" json:"-"`
 
@@ -35,11 +39,17 @@ type Config struct {
 	// TLS config controls HTTPS server settings.
 	TLS TLSConfig `yaml:"tls" json:"tls"`
 
+	// ShutdownTimeoutSeconds controls how long the API server waits for in-flight
+	// requests to finish during shutdown before forcibly closing connections.
+	// 0 (the default) keeps the legacy behavior of closing immediately without draining.
+	// Values are in seconds.
+	ShutdownTimeoutSeconds int `yaml:"shutdown-timeout" json:"shutdown-timeout"`
+
 	// Home config is runtime-only and is populated from -home-jwt.
 	Home HomeConfig `yaml:"-" json:"-"`
 
-	// SourceHash is runtime-only: the SHA-256 of the config file bytes this config was
-	// parsed from, or empty when the config was not loaded from a file.
+	// SourceHash is runtime-only: the SHA-256 of the exact config file snapshot after startup
+	// rewrites, or empty when the config was not loaded from a file.
 	SourceHash string `yaml:"-" json:"-"`
 
 	// CredentialConcurrency contains Home-authoritative credential lifecycle settings.
@@ -65,6 +75,9 @@ type Config struct {
 
 	// Discovery configures local network mDNS / DNS-SD service advertising.
 	Discovery DiscoveryConfig `yaml:"discovery" json:"discovery"`
+
+	// KVStore configures the local bbolt key-value store.
+	KVStore KVStoreConfig `yaml:"kv-store" json:"kv-store"`
 
 	// CommercialMode disables high-overhead request logging and HTTP middleware features to minimize per-request memory usage.
 	CommercialMode bool `yaml:"commercial-mode" json:"commercial-mode"`
@@ -132,6 +145,13 @@ type Config struct {
 
 	AntigravitySignatureBypassStrict *bool `yaml:"antigravity-signature-bypass-strict,omitempty" json:"antigravity-signature-bypass-strict,omitempty"`
 
+	// ProxyPoolPublisher identifies the runtime that published this snapshot, so a
+	// reload in one runtime never retires another runtime's snapshots.
+	ProxyPoolPublisher uint64 `yaml:"-" json:"-"`
+
+	// ProxyPoolGeneration fences obsolete runtime snapshots from the shared transport cache.
+	ProxyPoolGeneration uint64 `yaml:"-" json:"-"`
+
 	// Antigravity configures provider-wide Antigravity request behavior.
 	Antigravity AntigravityConfig `yaml:"antigravity" json:"antigravity"`
 
@@ -192,15 +212,15 @@ type Config struct {
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
 
 	// OAuthModelAlias defines global model name aliases for OAuth/file-backed auth channels.
-	// These aliases affect both model listing and model routing for supported channels:
-	// vertex, aistudio, antigravity, claude, codex, kimi, xai, meta.
+	// These aliases affect both model listing and model routing for supported channels,
+	// including vertex, aistudio, antigravity, claude, codex, kimi, xai, meta, and copilot.
 	//
 	// NOTE: This does not apply to existing per-credential model alias features under:
 	// gemini-api-key, interactions-api-key, codex-api-key, xai-api-key, meta-api-key, claude-api-key, openai-compatibility, and vertex-api-key.
 	OAuthModelAlias map[string][]OAuthModelAlias `yaml:"oauth-model-alias,omitempty" json:"oauth-model-alias,omitempty"`
 
 	// OAuthRequestScopedErrors defines per-provider request-scoped error rules applied to OAuth/file-backed auth entries.
-	// Supported channels include: vertex, aistudio, antigravity, claude, codex, kimi, xai, meta, and OAuth plugin provider keys.
+	// Supported channels include vertex, aistudio, antigravity, claude, codex, kimi, xai, meta, copilot, and OAuth plugin provider keys.
 	//
 	// NOTE: This applies only to OAuth credentials and does not affect per-credential request-scoped-errors under *-api-key.
 	OAuthRequestScopedErrors map[string][]RequestScopedErrorRule `yaml:"oauth-request-scoped-errors,omitempty" json:"oauth-request-scoped-errors,omitempty"`

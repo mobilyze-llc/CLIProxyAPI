@@ -2,10 +2,10 @@ package models
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"testing"
 
+	"github.com/MoeForge/moego/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 )
 
@@ -86,8 +86,8 @@ func TestCodexClientModelsResponse_InputModalitiesFromRegistry(t *testing.T) {
 	if got, _ := modalities[1].(string); got != "image" {
 		t.Fatalf("input_modalities[1] = %q, want image", got)
 	}
-	if got, ok := visionEntry["supports_image_detail_original"].(bool); !ok || !got {
-		t.Fatalf("supports_image_detail_original = %#v, want true", visionEntry["supports_image_detail_original"])
+	if got, ok := visionEntry["supports_image_detail_original"].(bool); !ok || got {
+		t.Fatalf("supports_image_detail_original = %#v, want false for non-Codex model", visionEntry["supports_image_detail_original"])
 	}
 
 	if textOnlyEntry == nil {
@@ -117,8 +117,8 @@ func TestCodexClientModelsResponse_InputModalitiesFromRegistry(t *testing.T) {
 	if got, _ := mixedModalities[1].(string); got != "image" {
 		t.Fatalf("mixed input_modalities[1] = %q, want image", got)
 	}
-	if got, ok := mixedEntry["supports_image_detail_original"].(bool); !ok || !got {
-		t.Fatalf("mixed supports_image_detail_original = %#v, want true", mixedEntry["supports_image_detail_original"])
+	if got, ok := mixedEntry["supports_image_detail_original"].(bool); !ok || got {
+		t.Fatalf("mixed supports_image_detail_original = %#v, want false for non-Codex model", mixedEntry["supports_image_detail_original"])
 	}
 
 	if imageEntry == nil {
@@ -143,17 +143,26 @@ func TestCodexClientHidesSpeechModels(t *testing.T) {
 	}
 }
 
-func TestCodexClientModelsResponse_AppliesDisplayNameToTemplateModel(t *testing.T) {
-	resp := BuildResponse([]map[string]any{{
-		"id":           "gpt-5.5",
-		"display_name": "Configured Codex Name",
-	}}, nil, false)
-	models, ok := resp["models"].([]map[string]any)
-	if !ok || len(models) != 1 {
-		t.Fatalf("models = %#v, want one model", resp["models"])
-	}
-	if got := stringModelValue(models[0], "display_name"); got != "Configured Codex Name" {
-		t.Fatalf("display_name = %q, want Configured Codex Name", got)
+func TestCodexClientModelsResponse_DisplayName(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, displayName, want string
+	}{
+		{"template", "gpt-5.5", "Configured Codex Name", "Configured Codex Name"},
+		{"copilot fable", "claude-fable-5.2", "Claude Fable 5.2 (Copilot)", "Claude Fable 5.2 (Copilot)"},
+		{"copilot mai", "mai-code-2", "MAI Code 2 (Copilot)", "MAI Code 2 (Copilot)"},
+		{"catalog fallback", "mai-code-2", "", "MAI Code 2"},
+		{"id fallback", "unknown-display-name-test", "", "unknown-display-name-test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := BuildResponseForClient([]map[string]any{{"id": tc.id, "display_name": tc.displayName}}, nil, false, "pi")
+			models, ok := resp["models"].([]map[string]any)
+			if !ok || len(models) != 1 {
+				t.Fatalf("models = %#v, want one model", resp["models"])
+			}
+			if got := stringModelValue(models[0], "display_name"); got != tc.want {
+				t.Errorf("display_name = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -476,7 +485,14 @@ func TestApplyCodexClientModelMetadataPreservesMultiAgentVersionWhenDisabled(t *
 
 func TestCodexClientModelsResponseAppliesMaxContextLengthOverride(t *testing.T) {
 	const wantOverride = 1048576
-	const wantDefault = 272000
+	// Non-template models inherit context windows from the catalog's
+	// default template (currently the gpt-5.5 entry).
+	_, defaultTemplate, errLoadTemplates := loadCodexClientModelTemplates()
+	if errLoadTemplates != nil || defaultTemplate == nil {
+		t.Fatalf("load codex client model templates: %v", errLoadTemplates)
+	}
+	wantDefaultContext := intModelValue(defaultTemplate, "context_window")
+	wantDefaultMaxContext := intModelValue(defaultTemplate, "max_context_window")
 
 	resp := BuildResponse([]map[string]any{
 		{"id": "deepseek-v4-flash", "max_context_length": wantOverride},
@@ -494,22 +510,23 @@ func TestCodexClientModelsResponseAppliesMaxContextLengthOverride(t *testing.T) 
 	}
 
 	for _, testCase := range []struct {
-		slug string
-		want int
+		slug           string
+		wantContext    int
+		wantMaxContext int
 	}{
-		{slug: "deepseek-v4-flash", want: wantOverride},
-		{slug: "deepseek-v4-pro", want: wantDefault},
-		{slug: "gpt-5.5", want: wantOverride},
+		{slug: "deepseek-v4-flash", wantContext: wantOverride, wantMaxContext: wantOverride},
+		{slug: "deepseek-v4-pro", wantContext: wantDefaultContext, wantMaxContext: wantDefaultMaxContext},
+		{slug: "gpt-5.5", wantContext: wantOverride, wantMaxContext: wantOverride},
 	} {
 		entry := bySlug[testCase.slug]
 		if entry == nil {
 			t.Fatalf("missing model %q", testCase.slug)
 		}
-		if got := intModelValue(entry, "context_window"); got != testCase.want {
-			t.Errorf("%s context_window = %d, want %d", testCase.slug, got, testCase.want)
+		if got := intModelValue(entry, "context_window"); got != testCase.wantContext {
+			t.Errorf("%s context_window = %d, want %d", testCase.slug, got, testCase.wantContext)
 		}
-		if got := intModelValue(entry, "max_context_window"); got != testCase.want {
-			t.Errorf("%s max_context_window = %d, want %d", testCase.slug, got, testCase.want)
+		if got := intModelValue(entry, "max_context_window"); got != testCase.wantMaxContext {
+			t.Errorf("%s max_context_window = %d, want %d", testCase.slug, got, testCase.wantMaxContext)
 		}
 	}
 }
@@ -931,8 +948,14 @@ func TestCodexClientModelsResponse_UnrelatedCustomProviderRetainsFallback(t *tes
 	if got := stringModelValue(entry, "slug"); got != "my-unrelated-custom-model" {
 		t.Errorf("slug = %q, want my-unrelated-custom-model", got)
 	}
-	if got := stringModelValue(entry, "comp_hash"); got != "2911" {
-		t.Errorf("comp_hash = %q, want 2911 (from generic gpt-5.5 fallback)", got)
+	// The fallback clones the catalog's default template (currently the
+	// gpt-5.5 entry); comp_hash is inherited from it verbatim.
+	_, defaultTemplate, errLoadTemplates := loadCodexClientModelTemplates()
+	if errLoadTemplates != nil || defaultTemplate == nil {
+		t.Fatalf("load codex client model templates: %v", errLoadTemplates)
+	}
+	if got, want := stringModelValue(entry, "comp_hash"), stringModelValue(defaultTemplate, "comp_hash"); got != want {
+		t.Errorf("comp_hash = %q, want %q (from generic fallback template)", got, want)
 	}
 	if got, _ := entry["supports_search_tool"].(bool); got {
 		t.Errorf("supports_search_tool = %v, want false for non-template fallback", got)
@@ -942,8 +965,8 @@ func TestCodexClientModelsResponse_UnrelatedCustomProviderRetainsFallback(t *tes
 	if !okMods || len(mods) != 2 {
 		t.Fatalf("unrelated model input_modalities = %#v, want generic [text image]", entry["input_modalities"])
 	}
-	if got, _ := entry["supports_image_detail_original"].(bool); !got {
-		t.Errorf("supports_image_detail_original = %v, want true for generic fallback", got)
+	if got, ok := entry["supports_image_detail_original"].(bool); !ok || got {
+		t.Errorf("supports_image_detail_original = %#v, want false for generic fallback", entry["supports_image_detail_original"])
 	}
 }
 
@@ -1556,7 +1579,7 @@ func TestCodexClientModelsResponse_DevinDisplayName(t *testing.T) {
 			"id":           "devin/gpt-6-astra",
 			"display_name": "GPT-6 Astra",
 		},
-		// 2. Template Devin model without display_name (inherits template "GPT-5.5")
+		// 2. Template Devin model without display_name (inherits the template's display_name)
 		{
 			"id": "devin/gpt-5.5",
 		},
@@ -1636,15 +1659,21 @@ func TestCodexClientModelsResponse_DevinDisplayName(t *testing.T) {
 		bySlug[slug] = m
 	}
 
+	templates, _, errLoadTemplates := loadCodexClientModelTemplates()
+	if errLoadTemplates != nil || templates["gpt-5.5"] == nil {
+		t.Fatalf("load codex client model templates: %v", errLoadTemplates)
+	}
+	templateDisplayName := stringModelValue(templates["gpt-5.5"], "display_name")
+
 	testCases := []struct {
 		slug            string
 		wantDisplayName string
 	}{
 		{"devin/gpt-6-astra", "GPT-6 Astra (Devin)"},
-		{"devin/gpt-5.5", "GPT-5.5 (Devin)"},
+		{"devin/gpt-5.5", templateDisplayName + " (Devin)"},
 		{"devin/swe-2", "SWE-2 (Devin)"},
 		{"gpt-6-astra", "GPT 6.0 Astra"},
-		{"gpt-5.5", "GPT-5.5"},
+		{"gpt-5.5", templateDisplayName},
 		{"devin/swe-1-7", "SWE-1.7 (Devin)"},
 		{"custom-devin-by-type", "Custom Model (Devin)"},
 		{"custom-devin-by-owned", "Cognition Model (Devin)"},
@@ -1689,8 +1718,6 @@ func TestMarshalCompactJSONIsSingleLine(t *testing.T) {
 
 func TestCodexClientModelsResponse_NonTemplateCatalogStaysWithinOneMiB(t *testing.T) {
 	ids := []string{
-		"gpt-6.2-sol",
-		"gpt-6.2-astra",
 		"gpt-6-astra",
 		"gpt-6-sol",
 		"gpt-6-luna",
@@ -1720,32 +1747,41 @@ func TestCodexClientModelsResponse_NonTemplateCatalogStaysWithinOneMiB(t *testin
 	if len(body) >= 1<<20 {
 		t.Fatalf("catalog size = %d bytes, want < 1MiB", len(body))
 	}
-	t.Logf("catalog size = %d bytes", len(body))
 
 	entries, _ := resp["models"].([]map[string]any)
-	var templateModel, solModel, astraModel, customModel map[string]any
+	var templateModel, customModel map[string]any
 	for _, entry := range entries {
 		switch stringModelValue(entry, "slug") {
 		case "gpt-5.5":
 			templateModel = entry
-		case "gpt-6.2-sol":
-			solModel = entry
-		case "gpt-6.2-astra":
-			astraModel = entry
 		case "custom-model-0":
 			customModel = entry
 		}
 	}
-	if templateModel == nil || solModel == nil || astraModel == nil || customModel == nil {
-		t.Fatal("expected template and custom models")
+	if templateModel == nil || customModel == nil {
+		t.Fatal("expected both template and custom models")
 	}
-	for _, model := range []map[string]any{templateModel, solModel, astraModel} {
-		if len(stringModelValue(model, "base_instructions")) < 1000 {
-			t.Fatal("expected official template models to keep their full instructions")
-		}
+	if len(stringModelValue(templateModel, "base_instructions")) < 1000 {
+		t.Fatal("expected official template models to keep their full instructions")
 	}
 	if stringModelValue(customModel, "base_instructions") != codexClientFallbackInstructions {
 		t.Fatalf("custom base_instructions = %q", stringModelValue(customModel, "base_instructions"))
+	}
+}
+
+func TestCodexClientModelsResponse_PreservesForkTemplateInstructions(t *testing.T) {
+	ids := []string{"gpt-6.2-sol", "gpt-6.2-astra"}
+	available := []map[string]any{{"id": ids[0]}, {"id": ids[1]}}
+	catalog := BuildResponseForClient(available, nil, false, "")
+	entries, _ := catalog["models"].([]map[string]any)
+	instructions := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		instructions[stringModelValue(entry, "slug")] = stringModelValue(entry, "base_instructions")
+	}
+	for _, id := range ids {
+		if len(instructions[id]) < 1000 {
+			t.Errorf("Codex template %s lost its full instructions", id)
+		}
 	}
 }
 
@@ -1860,6 +1896,395 @@ func TestCodexClientModelsResponse_DoesNotLeakResponsesLiteOrCodeModeToNonCodexR
 		}
 		if got, ok := entry["supports_reasoning_effort_updates"].(bool); !ok || got {
 			t.Errorf("%s supports_reasoning_effort_updates = %#v, want false", slug, entry["supports_reasoning_effort_updates"])
+		}
+	}
+}
+
+func TestCodexClientModelsResponse_DoesNotAdvertiseImageDetailOriginalForClaudeOrNonCodexRoutes_Issue7209(t *testing.T) {
+	modelRegistry := registry.GetGlobalRegistry()
+	claudeClientID := "codex-claude-image-detail-original-test"
+	codexClientID := "codex-native-image-detail-original-test"
+	claudeAlias := "claude-backed-astra-issue7209"
+	mixedAlias := "mixed-claude-codex-astra-issue7209"
+
+	modelRegistry.RegisterClient(claudeClientID, "claude", []*registry.ModelInfo{
+		{
+			ID:                       "claude-opus-5-5",
+			DisplayName:              "Claude Opus 5.5",
+			SupportedInputModalities: []string{"text", "image"},
+		},
+		{
+			ID:                       "claude-sonnet-5-5",
+			DisplayName:              "Claude Sonnet 5.5",
+			SupportedInputModalities: []string{"text", "image"},
+		},
+		{
+			ID:                       "claude-haiku-5-5",
+			DisplayName:              "Claude Haiku 5.5",
+			SupportedInputModalities: []string{"text", "image"},
+		},
+		{
+			ID:                       "claude-fable-5-1",
+			DisplayName:              "Claude Fable 5.1",
+			SupportedInputModalities: []string{"text", "image"},
+		},
+		{
+			ID:                       claudeAlias,
+			MetadataModelID:          "gpt-6-astra",
+			DisplayName:              "Claude Backed Astra",
+			SupportedInputModalities: []string{"text", "image"},
+		},
+		{
+			ID:                       mixedAlias,
+			MetadataModelID:          "gpt-6-astra",
+			DisplayName:              "Mixed Claude Codex Astra",
+			SupportedInputModalities: []string{"text", "image"},
+		},
+	})
+	modelRegistry.RegisterClient(codexClientID, "codex", []*registry.ModelInfo{
+		{
+			ID:              "gpt-6-astra",
+			MetadataModelID: "gpt-6-astra",
+			DisplayName:     "GPT 6.0 Astra",
+		},
+		{
+			ID:              mixedAlias,
+			MetadataModelID: "gpt-6-astra",
+			DisplayName:     "Mixed Claude Codex Astra",
+		},
+	})
+	t.Cleanup(func() {
+		modelRegistry.UnregisterClient(claudeClientID)
+		modelRegistry.UnregisterClient(codexClientID)
+	})
+
+	available := []map[string]any{
+		{"id": "gpt-6-astra"},
+		{"id": "claude-opus-5-5"},
+		{"id": "claude-sonnet-5-5"},
+		{"id": "claude-haiku-5-5"},
+		{"id": "claude-fable-5-1"},
+		{"id": claudeAlias},
+		{"id": mixedAlias},
+	}
+
+	resp := BuildResponseForClient(available, modelRegistry.GetModelProviders, false, "0.166.0")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok || len(models) != len(available) {
+		t.Fatalf("models = %#v, want %d entries", resp["models"], len(available))
+	}
+
+	bySlug := make(map[string]map[string]any, len(models))
+	for _, entry := range models {
+		bySlug[stringModelValue(entry, "slug")] = entry
+	}
+
+	native := bySlug["gpt-6-astra"]
+	if native == nil {
+		t.Fatal("missing gpt-6-astra entry")
+	}
+	if got, ok := native["supports_image_detail_original"].(bool); !ok || !got {
+		t.Errorf("gpt-6-astra supports_image_detail_original = %#v, want true", native["supports_image_detail_original"])
+	}
+
+	for _, slug := range []string{
+		"claude-opus-5-5",
+		"claude-sonnet-5-5",
+		"claude-haiku-5-5",
+		"claude-fable-5-1",
+		claudeAlias,
+		mixedAlias,
+	} {
+		entry := bySlug[slug]
+		if entry == nil {
+			t.Fatalf("missing %s entry", slug)
+		}
+		modalities, okMods := entry["input_modalities"].([]any)
+		if !okMods || !hasImageModality(modalities) {
+			t.Errorf("%s input_modalities = %#v, want image modality preserved", slug, entry["input_modalities"])
+		}
+		if got, ok := entry["supports_image_detail_original"].(bool); !ok || got {
+			t.Errorf("%s supports_image_detail_original = %#v, want false", slug, entry["supports_image_detail_original"])
+		}
+	}
+}
+
+func TestCodexClientModelsResponse_FallbackFiltersAudioFromDefaultTemplate(t *testing.T) {
+	_, revision := registry.GetCodexClientModelsSnapshot()
+	codexClientModelTemplatesMu.Lock()
+	previousLoaded := codexClientModelTemplatesLoaded
+	previousRevision := codexClientModelTemplatesRevision
+	previousTemplates := codexClientModelTemplates
+	previousDefault := codexClientDefaultTemplate
+	previousErr := codexClientModelTemplatesErr
+	codexClientModelTemplatesLoaded = false
+	codexClientModelTemplatesMu.Unlock()
+	t.Cleanup(func() {
+		codexClientModelTemplatesMu.Lock()
+		codexClientModelTemplatesLoaded = previousLoaded
+		codexClientModelTemplatesRevision = previousRevision
+		codexClientModelTemplates = previousTemplates
+		codexClientDefaultTemplate = previousDefault
+		codexClientModelTemplatesErr = previousErr
+		codexClientModelTemplatesMu.Unlock()
+	})
+
+	snapshot := []byte(`{"models":[{
+		"slug":"gpt-5.5",
+		"display_name":"GPT-6.2-Sol",
+		"description":"Fast model.",
+		"base_instructions":"Full instructions",
+		"minimal_client_version":"0.166.0",
+		"visibility":"list",
+		"context_window":500000,
+		"max_context_window":872000,
+		"priority":2,
+		"default_reasoning_level":"low",
+		"supported_reasoning_levels":[{"effort":"low","description":"Fast"}],
+		"input_modalities":["text","image","audio"],
+		"supports_image_detail_original":true,
+		"service_tiers":[{"id":"priority"}]
+	}]}`)
+	if _, _, errLoad := loadCodexClientModelTemplatesSnapshot(snapshot, revision); errLoad != nil {
+		t.Fatalf("loadCodexClientModelTemplatesSnapshot: %v", errLoad)
+	}
+
+	// Verify with an older client version (< 0.166.0) that non-template fallback models
+	// decouple minimal_client_version from the donor template and filter donor audio modality.
+	resp := BuildResponseForClient([]map[string]any{
+		{"id": "custom-audio-filter-model"},
+	}, nil, false, "0.153.4")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("models = %#v, want 1 entry", resp["models"])
+	}
+
+	mods, okMods := models[0]["input_modalities"].([]any)
+	if !okMods || len(mods) != 2 || mods[0] != "text" || mods[1] != "image" {
+		t.Fatalf("fallback input_modalities = %#v, want [text image]", models[0]["input_modalities"])
+	}
+	if got := stringModelValue(models[0], "minimal_client_version"); got != "0.124.0" {
+		t.Fatalf("fallback minimal_client_version = %q, want 0.124.0", got)
+	}
+	if cmp, okCmp := compareDottedVersions(stringModelValue(models[0], "minimal_client_version"), "0.153.4"); !okCmp || cmp > 0 {
+		t.Fatalf("fallback minimal_client_version = %q must remain compatible with older client 0.153.4", models[0]["minimal_client_version"])
+	}
+}
+
+func TestCodexClientModelsResponse_FallbackSetsSupportedInAPIAndVisibility(t *testing.T) {
+	_, revision := registry.GetCodexClientModelsSnapshot()
+	codexClientModelTemplatesMu.Lock()
+	previousLoaded := codexClientModelTemplatesLoaded
+	previousRevision := codexClientModelTemplatesRevision
+	previousTemplates := codexClientModelTemplates
+	previousDefault := codexClientDefaultTemplate
+	previousErr := codexClientModelTemplatesErr
+	codexClientModelTemplatesLoaded = false
+	codexClientModelTemplatesMu.Unlock()
+	t.Cleanup(func() {
+		codexClientModelTemplatesMu.Lock()
+		codexClientModelTemplatesLoaded = previousLoaded
+		codexClientModelTemplatesRevision = previousRevision
+		codexClientModelTemplates = previousTemplates
+		codexClientDefaultTemplate = previousDefault
+		codexClientModelTemplatesErr = previousErr
+		codexClientModelTemplatesMu.Unlock()
+	})
+
+	snapshot := []byte(`{"models":[{
+		"slug":"gpt-5.5",
+		"display_name":"GPT-6 Chat Thinking",
+		"description":"Hidden non-API template.",
+		"base_instructions":"Full instructions",
+		"minimal_client_version":"0.144.0",
+		"visibility":"hide",
+		"supported_in_api":false,
+		"context_window":272000,
+		"max_context_window":272000,
+		"priority":1,
+		"default_reasoning_level":"medium",
+		"supported_reasoning_levels":[{"effort":"medium","description":"Medium"}],
+		"input_modalities":["text","image"],
+		"supports_image_detail_original":true,
+		"service_tiers":[]
+	}]}`)
+	if _, _, errLoad := loadCodexClientModelTemplatesSnapshot(snapshot, revision); errLoad != nil {
+		t.Fatalf("loadCodexClientModelTemplatesSnapshot: %v", errLoad)
+	}
+
+	resp := BuildResponseForClient([]map[string]any{
+		{"id": "deepseek-v4.1-flash"},
+		{"id": "gpt-image-2"},
+	}, nil, false, "0.171.0")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok || len(models) != 2 {
+		t.Fatalf("models = %#v, want 2 entries", resp["models"])
+	}
+
+	bySlug := make(map[string]map[string]any, len(models))
+	for _, entry := range models {
+		bySlug[stringModelValue(entry, "slug")] = entry
+	}
+
+	thirdParty, okThirdParty := bySlug["deepseek-v4.1-flash"]
+	if !okThirdParty {
+		t.Fatalf("missing deepseek-v4.1-flash entry: %#v", bySlug)
+	}
+	if supported, okSupported := thirdParty["supported_in_api"].(bool); !okSupported || !supported {
+		t.Errorf("deepseek-v4.1-flash supported_in_api = %#v, want true", thirdParty["supported_in_api"])
+	}
+	if vis := stringModelValue(thirdParty, "visibility"); vis != "list" {
+		t.Errorf("deepseek-v4.1-flash visibility = %q, want list", vis)
+	}
+
+	imageModel, okImage := bySlug["gpt-image-2"]
+	if !okImage {
+		t.Fatalf("missing gpt-image-2 entry: %#v", bySlug)
+	}
+	if vis := stringModelValue(imageModel, "visibility"); vis != "hide" {
+		t.Errorf("gpt-image-2 visibility = %q, want hide", vis)
+	}
+}
+
+func TestCodexClientModelsResponse_NamedTemplateFiltersUnsupportedModalities(t *testing.T) {
+	_, revision := registry.GetCodexClientModelsSnapshot()
+	codexClientModelTemplatesMu.Lock()
+	previousLoaded := codexClientModelTemplatesLoaded
+	previousRevision := codexClientModelTemplatesRevision
+	previousTemplates := codexClientModelTemplates
+	previousDefault := codexClientDefaultTemplate
+	previousErr := codexClientModelTemplatesErr
+	codexClientModelTemplatesLoaded = false
+	codexClientModelTemplatesMu.Unlock()
+	t.Cleanup(func() {
+		codexClientModelTemplatesMu.Lock()
+		codexClientModelTemplatesLoaded = previousLoaded
+		codexClientModelTemplatesRevision = previousRevision
+		codexClientModelTemplates = previousTemplates
+		codexClientDefaultTemplate = previousDefault
+		codexClientModelTemplatesErr = previousErr
+		codexClientModelTemplatesMu.Unlock()
+	})
+
+	snapshot := []byte(`{"models":[{
+		"slug":"gpt-5.5",
+		"display_name":"GPT-5.5",
+		"description":"Default template.",
+		"minimal_client_version":"0.124.0",
+		"visibility":"list",
+		"context_window":272000,
+		"priority":1,
+		"default_reasoning_level":"low",
+		"supported_reasoning_levels":[{"effort":"low","description":"Fast"}],
+		"input_modalities":["text","image"],
+		"supports_image_detail_original":true
+	},{
+		"slug":"audio-vision-model",
+		"display_name":"Audio Vision",
+		"description":"Named template that lists audio.",
+		"minimal_client_version":"0.124.0",
+		"visibility":"list",
+		"context_window":272000,
+		"priority":2,
+		"default_reasoning_level":"low",
+		"supported_reasoning_levels":[{"effort":"low","description":"Fast"}],
+		"input_modalities":["text","image","audio"],
+		"supports_image_detail_original":true
+	},{
+		"slug":"audio-text-model",
+		"display_name":"Audio Text",
+		"description":"Named template that lists audio without image.",
+		"minimal_client_version":"0.124.0",
+		"visibility":"list",
+		"context_window":272000,
+		"priority":3,
+		"default_reasoning_level":"low",
+		"supported_reasoning_levels":[{"effort":"low","description":"Fast"}],
+		"input_modalities":["text","audio"],
+		"supports_image_detail_original":true
+	},{
+		"slug":"audio-only-model",
+		"display_name":"Audio Only",
+		"description":"Named template that lists only unsupported modalities.",
+		"minimal_client_version":"0.124.0",
+		"visibility":"list",
+		"context_window":272000,
+		"priority":4,
+		"default_reasoning_level":"low",
+		"supported_reasoning_levels":[{"effort":"low","description":"Fast"}],
+		"input_modalities":["audio"],
+		"supports_image_detail_original":true
+	}]}`)
+	if _, _, errLoad := loadCodexClientModelTemplatesSnapshot(snapshot, revision); errLoad != nil {
+		t.Fatalf("loadCodexClientModelTemplatesSnapshot: %v", errLoad)
+	}
+
+	resp := BuildResponseForClient([]map[string]any{
+		{"id": "audio-vision-model"},
+		{"id": "audio-text-model"},
+		{"id": "audio-only-model"},
+	}, func(string) []string { return []string{"codex"} }, false, "0.167.1")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok || len(models) != 3 {
+		t.Fatalf("models = %#v, want 3 entries", resp["models"])
+	}
+	bySlug := make(map[string]map[string]any, len(models))
+	for _, entry := range models {
+		bySlug[stringModelValue(entry, "slug")] = entry
+	}
+
+	vision := bySlug["audio-vision-model"]
+	mods, okMods := vision["input_modalities"].([]any)
+	if !okMods || len(mods) != 2 || mods[0] != "text" || mods[1] != "image" {
+		t.Fatalf("audio-vision-model input_modalities = %#v, want [text image]", vision["input_modalities"])
+	}
+	if vision["supports_image_detail_original"] != true {
+		t.Fatalf("audio-vision-model supports_image_detail_original = %#v, want true", vision["supports_image_detail_original"])
+	}
+
+	textOnly := bySlug["audio-text-model"]
+	mods, okMods = textOnly["input_modalities"].([]any)
+	if !okMods || len(mods) != 1 || mods[0] != "text" {
+		t.Fatalf("audio-text-model input_modalities = %#v, want [text]", textOnly["input_modalities"])
+	}
+	if _, present := textOnly["supports_image_detail_original"]; present {
+		t.Fatalf("audio-text-model supports_image_detail_original = %#v, want absent", textOnly["supports_image_detail_original"])
+	}
+
+	audioOnly := bySlug["audio-only-model"]
+	mods, okMods = audioOnly["input_modalities"].([]any)
+	if !okMods || len(mods) != 0 {
+		t.Fatalf("audio-only-model input_modalities = %#v, want []", audioOnly["input_modalities"])
+	}
+	if _, present := audioOnly["supports_image_detail_original"]; present {
+		t.Fatalf("audio-only-model supports_image_detail_original = %#v, want absent", audioOnly["supports_image_detail_original"])
+	}
+}
+
+func TestCodexClientModelsResponse_EmbeddedGPT62SolAndGPT55OmitAudio(t *testing.T) {
+	resp := BuildResponseForClient([]map[string]any{
+		{"id": "gpt-6.2-sol"},
+		{"id": "gpt-5.5"},
+	}, func(string) []string { return []string{"codex"} }, false, "0.167.1")
+	models, ok := resp["models"].([]map[string]any)
+	if !ok || len(models) != 2 {
+		t.Fatalf("models = %#v, want 2 entries", resp["models"])
+	}
+	bySlug := make(map[string]map[string]any, len(models))
+	for _, entry := range models {
+		bySlug[stringModelValue(entry, "slug")] = entry
+	}
+	for _, slug := range []string{"gpt-6.2-sol", "gpt-5.5"} {
+		entry, exists := bySlug[slug]
+		if !exists {
+			t.Fatalf("missing %s entry", slug)
+		}
+		mods, okMods := entry["input_modalities"].([]any)
+		if !okMods || len(mods) != 2 || mods[0] != "text" || mods[1] != "image" {
+			t.Fatalf("%s input_modalities = %#v, want [text image]", slug, entry["input_modalities"])
+		}
+		if entry["supports_image_detail_original"] != true {
+			t.Fatalf("%s supports_image_detail_original = %#v, want true", slug, entry["supports_image_detail_original"])
 		}
 	}
 }

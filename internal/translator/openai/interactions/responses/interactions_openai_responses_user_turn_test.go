@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 const (
@@ -86,7 +86,7 @@ func TestConvertOpenAIResponsesRequestToInteractions_RefusesAnyEmptiedUserTurn(t
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body, err := convertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", tc.input, false)
+			body, err := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", tc.input, false)
 			var unsupported *translatorcommon.UnsupportedPartError
 			if !errors.As(err, &unsupported) || unsupported.Type != tc.wantType || unsupported.StatusCode() != 400 {
 				t.Fatalf("err = %v, want unsupported content part: %s; body = %s", err, tc.wantType, body)
@@ -94,7 +94,7 @@ func TestConvertOpenAIResponsesRequestToInteractions_RefusesAnyEmptiedUserTurn(t
 			if got, want := err.Error(), "unsupported content part: "+tc.wantType; got != want {
 				t.Fatalf("error text = %q, want %q", got, want)
 			}
-			if !gjson.ValidBytes(body) {
+			if !ojson.ValidBytes(body) {
 				t.Fatalf("body is not JSON: %q", body)
 			}
 
@@ -111,11 +111,11 @@ func TestConvertOpenAIResponsesRequestToInteractions_KeepsTurnWithTextBesideAtta
 	for name, attachment := range map[string]string{"file id": interactionsTurnFileID, "audio without bytes": interactionsTurnNoAudio} {
 		t.Run(name, func(t *testing.T) {
 			input := interactionsTurnPayload("", interactionsTurnHello, interactionsTurnAssistant, interactionsUserTurn("user", interactionsTurnText, attachment))
-			body, err := convertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false)
+			body, err := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false)
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
-			if got := gjson.GetBytes(body, "input.2.content.0.text").String(); got != "keep me" {
+			if got := ojson.GetBytesNoCopy(body, "input.2.content.0.text").String(); got != "keep me" {
 				t.Fatalf("text was lost: %s", body)
 			}
 		})
@@ -143,11 +143,11 @@ func TestConvertOpenAIResponsesRequestToInteractions_MapsBytesAndUrls(t *testing
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			input := interactionsTurnPayload("", interactionsTurnHello, interactionsTurnAssistant, interactionsUserTurn("user", tc.part))
-			body, err := convertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false)
+			body, err := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false)
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
-			part := gjson.GetBytes(body, "input.2.content.0")
+			part := ojson.GetBytesNoCopy(body, "input.2.content.0")
 			for path, want := range tc.want {
 				if got := part.Get(path).String(); got != want {
 					t.Fatalf("%s = %q, want %q; part = %s, body = %s", path, got, want, part.Raw, body)
@@ -159,11 +159,11 @@ func TestConvertOpenAIResponsesRequestToInteractions_MapsBytesAndUrls(t *testing
 
 func TestConvertOpenAIResponsesRequestToInteractions_BareFileItemStaysADocument(t *testing.T) {
 	input := interactionsTurnPayload("", interactionsTurnHello, interactionsTurnAssistant, interactionsTurnFileData)
-	body, err := convertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false)
+	body, err := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	step := gjson.GetBytes(body, "input.2")
+	step := ojson.GetBytesNoCopy(body, "input.2")
 	if step.Get("type").String() != "user_input" || step.Get("content.0.type").String() != "document" || step.Get("content.0.data").String() != "JVBERi0xLjQK" {
 		t.Fatalf("step = %s, body = %s", step.Raw, body)
 	}
@@ -171,14 +171,14 @@ func TestConvertOpenAIResponsesRequestToInteractions_BareFileItemStaysADocument(
 
 func TestConvertOpenAIResponsesRequestToInteractions_DeveloperAttachmentIsNotAUserTurn(t *testing.T) {
 	input := interactionsTurnPayload("", interactionsUserTurn("developer", interactionsTurnFileID), interactionsTurnNext)
-	if _, err := convertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false); err != nil {
+	if _, err := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false); err != nil {
 		t.Fatalf("err = %v, want no refusal for a developer message", err)
 	}
 }
 
 func TestConvertOpenAIResponsesRequestToInteractions_ExportedWrapperKeepsAJSONBody(t *testing.T) {
 	input := interactionsTurnPayload("", interactionsUserTurn("user", interactionsTurnFileID))
-	if body, _ := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false); !gjson.ValidBytes(body) {
+	if body, _ := ConvertOpenAIResponsesRequestToInteractions("gemini-3.5-flash", input, false); !ojson.ValidBytes(body) {
 		t.Fatalf("body is not JSON: %q", body)
 	}
 }

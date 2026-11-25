@@ -51,4 +51,7 @@ func TestAntigravityModelFallbacksYieldToRemoteCatalog(t *testing.T) {
 			t.Fatalf("missing Neon %s fallback or incorrect reasoning levels: %+v", tier, model)
 		}
 	}
+	if model := LookupStaticModelInfoByChannel("gemini-4-neon-low", "antigravity"); model == nil {
+		t.Fatal("Antigravity channel lookup omitted the Neon low fallback")
+	}
 }

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 const claudeIssue6698SSE = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
@@ -44,7 +44,7 @@ func TestClaudeExecutor_Sonnet55ThinkingOffSendsBetweenTools(t *testing.T) {
 						upstreamBody, _ = io.ReadAll(req.Body)
 						contentType := "application/json"
 						body := `{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
-						if gjson.GetBytes(upstreamBody, "stream").Bool() {
+						if ojson.GetBytes(upstreamBody, "stream").Bool() {
 							contentType = "text/event-stream"
 							body = claudeIssue6698SSE
 						}
@@ -69,13 +69,13 @@ func TestClaudeExecutor_Sonnet55ThinkingOffSendsBetweenTools(t *testing.T) {
 						t.Fatalf("Execute() error = %v", err)
 					}
 
-					if got := gjson.GetBytes(upstreamBody, "thinking").Raw; got != `{"type":"between_tools"}` {
+					if got := ojson.GetBytes(upstreamBody, "thinking").Raw; got != `{"type":"between_tools"}` {
 						t.Fatalf("upstream thinking = %s, want {\"type\":\"between_tools\"}; body=%s", got, upstreamBody)
 					}
-					if got := gjson.GetBytes(upstreamBody, "output_config.effort"); got.Exists() {
+					if got := ojson.GetBytes(upstreamBody, "output_config.effort"); got.Exists() {
 						t.Errorf("upstream output_config.effort = %s, want absent", got.Raw)
 					}
-					if got := gjson.GetBytes(upstreamBody, "context_management"); got.Exists() {
+					if got := ojson.GetBytes(upstreamBody, "context_management"); got.Exists() {
 						t.Errorf("upstream context_management = %s, want absent with between_tools", got.Raw)
 					}
 				})
@@ -102,7 +102,7 @@ func TestClaudeExecutor_AdaptiveOnlyThinkingOffKeepsThinkingHidden(t *testing.T)
 					upstreamBody, _ = io.ReadAll(req.Body)
 					contentType := "application/json"
 					body := `{"id":"msg_test","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
-					if gjson.GetBytes(upstreamBody, "stream").Bool() {
+					if ojson.GetBytes(upstreamBody, "stream").Bool() {
 						contentType = "text/event-stream"
 						body = claudeIssue6698SSE
 					}
@@ -117,13 +117,13 @@ func TestClaudeExecutor_AdaptiveOnlyThinkingOffKeepsThinkingHidden(t *testing.T)
 					t.Fatalf("Execute() error = %v", err)
 				}
 
-				if got := gjson.GetBytes(upstreamBody, "thinking.type").String(); got != "adaptive" {
+				if got := ojson.GetBytes(upstreamBody, "thinking.type").String(); got != "adaptive" {
 					t.Fatalf("upstream thinking.type = %q, want adaptive; body=%s", got, upstreamBody)
 				}
-				if got := gjson.GetBytes(upstreamBody, "output_config.effort").String(); got != "low" {
+				if got := ojson.GetBytes(upstreamBody, "output_config.effort").String(); got != "low" {
 					t.Errorf("upstream output_config.effort = %q, want low", got)
 				}
-				if got := gjson.GetBytes(upstreamBody, "thinking.display").String(); got != "omitted" {
+				if got := ojson.GetBytes(upstreamBody, "thinking.display").String(); got != "omitted" {
 					t.Errorf("upstream thinking.display = %q, want omitted; body=%s", got, upstreamBody)
 				}
 			})
@@ -133,7 +133,7 @@ func TestClaudeExecutor_AdaptiveOnlyThinkingOffKeepsThinkingHidden(t *testing.T)
 
 func TestClaudeExecutor_AdaptiveOnlyGeminiBudgetAndAuto(t *testing.T) {
 	for _, model := range []string{"claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-fable-5-1"} {
-		t.Run(model+" gemini budget 64000 maps to xhigh", func(t *testing.T) {
+		t.Run(model+" gemini budget 64000 maps to max", func(t *testing.T) {
 			var upstreamBody []byte
 			transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 				upstreamBody, _ = io.ReadAll(req.Body)
@@ -152,14 +152,14 @@ func TestClaudeExecutor_AdaptiveOnlyGeminiBudgetAndAuto(t *testing.T) {
 			if _, err := executor.Execute(ctx, auth, request, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatGemini}); err != nil {
 				t.Fatalf("Execute() error = %v", err)
 			}
-			if got := gjson.GetBytes(upstreamBody, "thinking.type").String(); got != "adaptive" {
+			if got := ojson.GetBytes(upstreamBody, "thinking.type").String(); got != "adaptive" {
 				t.Fatalf("upstream thinking.type = %q, want adaptive; body=%s", got, upstreamBody)
 			}
-			if gjson.GetBytes(upstreamBody, "thinking.budget_tokens").Exists() {
+			if ojson.GetBytes(upstreamBody, "thinking.budget_tokens").Exists() {
 				t.Fatalf("upstream thinking.budget_tokens still present: %s", upstreamBody)
 			}
-			if got := gjson.GetBytes(upstreamBody, "output_config.effort").String(); got != "xhigh" {
-				t.Fatalf("upstream output_config.effort = %q, want xhigh; body=%s", got, upstreamBody)
+			if got := ojson.GetBytes(upstreamBody, "output_config.effort").String(); got != "max" {
+				t.Fatalf("upstream output_config.effort = %q, want max; body=%s", got, upstreamBody)
 			}
 		})
 
@@ -182,13 +182,13 @@ func TestClaudeExecutor_AdaptiveOnlyGeminiBudgetAndAuto(t *testing.T) {
 			if _, err := executor.Execute(ctx, auth, request, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatGemini}); err != nil {
 				t.Fatalf("Execute() error = %v", err)
 			}
-			if got := gjson.GetBytes(upstreamBody, "thinking.type").String(); got != "adaptive" {
+			if got := ojson.GetBytes(upstreamBody, "thinking.type").String(); got != "adaptive" {
 				t.Fatalf("upstream thinking.type = %q, want adaptive; body=%s", got, upstreamBody)
 			}
-			if gjson.GetBytes(upstreamBody, "thinking.budget_tokens").Exists() {
+			if ojson.GetBytes(upstreamBody, "thinking.budget_tokens").Exists() {
 				t.Fatalf("upstream thinking.budget_tokens still present: %s", upstreamBody)
 			}
-			if got := gjson.GetBytes(upstreamBody, "output_config.effort"); got.Exists() {
+			if got := ojson.GetBytes(upstreamBody, "output_config.effort"); got.Exists() {
 				t.Fatalf("upstream output_config.effort = %s, want absent; body=%s", got.Raw, upstreamBody)
 			}
 		})

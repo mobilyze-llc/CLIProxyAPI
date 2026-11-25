@@ -5,6 +5,7 @@ package registry
 import (
 	_ "embed"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -16,18 +17,23 @@ const (
 	codexBuiltinImage25FlareModelID    = "gpt-image-2.5-flare"
 	codexBuiltinImage25SunburstModelID = "gpt-image-2.5-sunburst"
 	codexBuiltinImage25ModelID         = "gpt-image-2.5"
+	codexBuiltinImage26FlareModelID    = "gpt-image-2.6-flare"
+	codexBuiltinImage26SunburstModelID = "gpt-image-2.6-sunburst"
+	codexBuiltinImage26ModelID         = "gpt-image-2.6"
 	xaiBuiltinImageModelID             = "grok-imagine-image"
 	xaiBuiltinImageQualityModelID      = "grok-imagine-image-quality"
 	xaiBuiltinImage20ModelID           = "grok-imagine-image-2.0"
 	xaiBuiltinVideoModelID             = "grok-imagine-video"
 	xaiBuiltinVideo15ModelID           = "grok-imagine-video-1.5"
 	xaiBuiltinVideo15PreviewID         = "grok-imagine-video-1.5-preview"
+	xaiBuiltinVideo15LiteModelID       = "grok-imagine-video-1.5-lite"
 	xaiBuiltinSpeechModelID            = "grok-tts"
 	xaiBuiltinSpeechVoiceModelID       = "grok-voice-tts-1.0"
 )
 
 // staticModelsJSON mirrors the top-level structure of models.json.
 type staticModelsJSON struct {
+	Copilot     []*ModelInfo `json:"copilot"`
 	Claude      []*ModelInfo `json:"claude"`
 	Gemini      []*ModelInfo `json:"gemini"`
 	Vertex      []*ModelInfo `json:"vertex"`
@@ -46,6 +52,11 @@ type staticModelsJSON struct {
 // GetClaudeModels returns the standard Claude model definitions.
 func GetClaudeModels() []*ModelInfo {
 	return cloneModelInfos(getModels().Claude)
+}
+
+// GetCopilotModels returns the Copilot presets from the active model catalog.
+func GetCopilotModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Copilot)
 }
 
 // GetGeminiModels returns the standard Gemini model definitions.
@@ -127,131 +138,6 @@ func GetAntigravityModels() []*ModelInfo {
 	return withModelFallbacks(cloneModelInfos(getModels().Antigravity), antigravityModelFallbacks)
 }
 
-var staticDevinModels = []*ModelInfo{
-	devinBuiltinSWE16SlowModelInfo(),
-	{
-		ID:                  "devin/swe-2",
-		Type:                "devin",
-		OwnedBy:             "cognition",
-		DisplayName:         "SWE-2",
-		ContextLength:       262000,
-		MaxCompletionTokens: 128000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"medium", "high", "max"},
-		},
-	},
-	{
-		ID:                  "devin/claude-fable-5-1",
-		Type:                "devin",
-		OwnedBy:             "anthropic",
-		DisplayName:         "Claude Fable 5.1",
-		ContextLength:       1000000,
-		MaxCompletionTokens: 64000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"low", "medium", "high", "xhigh", "max"},
-		},
-	},
-	{
-		ID:                  "devin/gpt-6-astra",
-		Type:                "devin",
-		OwnedBy:             "openai",
-		DisplayName:         "GPT-6 Astra",
-		ContextLength:       1000000,
-		MaxCompletionTokens: 64000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"low", "medium", "high", "xhigh", "max"},
-		},
-	},
-	{
-		ID:                  "devin/glm-5-2",
-		Type:                "devin",
-		OwnedBy:             "zhipu",
-		DisplayName:         "GLM-5.2",
-		ContextLength:       200000,
-		MaxCompletionTokens: 64000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"none", "high"},
-		},
-	},
-	{
-		ID:                  "devin/glm-5-3",
-		Type:                "devin",
-		OwnedBy:             "zhipu",
-		DisplayName:         "GLM-5.3",
-		ContextLength:       1048576,
-		MaxCompletionTokens: 128000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"low", "high", "max"},
-		},
-	},
-	{
-		ID:                  "devin/glm-5-3-flash",
-		Type:                "devin",
-		OwnedBy:             "zhipu",
-		DisplayName:         "GLM-5.3 Flash",
-		ContextLength:       1000000,
-		MaxCompletionTokens: 128000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"low", "high", "max"},
-		},
-	},
-	{
-		ID:                  "devin/gpt-5-6-sol",
-		Type:                "devin",
-		OwnedBy:             "openai",
-		DisplayName:         "GPT-5.6 Sol",
-		ContextLength:       1000000,
-		MaxCompletionTokens: 128000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"none", "low", "medium", "high", "xhigh", "max"},
-		},
-	},
-	{
-		ID:                  "devin/gemini-3-8-flash",
-		Type:                "devin",
-		OwnedBy:             "google",
-		DisplayName:         "Gemini 3.8 Flash",
-		ContextLength:       1048576,
-		MaxCompletionTokens: 65536,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"low", "medium", "high"},
-		},
-	},
-	{
-		ID:                  "devin/grok-4-6",
-		Type:                "devin",
-		OwnedBy:             "xai",
-		DisplayName:         "Grok 4.6",
-		ContextLength:       500000,
-		MaxCompletionTokens: 131072,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"low", "medium", "high", "xhigh"},
-		},
-	},
-	{
-		ID:                  "devin/deepseek-v4-flash",
-		Type:                "devin",
-		OwnedBy:             "deepseek",
-		DisplayName:         "DeepSeek V4 Flash",
-		ContextLength:       1048576,
-		MaxCompletionTokens: 64000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"high", "max"},
-		},
-	},
-	{
-		ID:                  "devin/deepseek-v4-1-flash",
-		Type:                "devin",
-		OwnedBy:             "deepseek",
-		DisplayName:         "DeepSeek V4.1 Flash",
-		ContextLength:       1048576,
-		MaxCompletionTokens: 64000,
-		Thinking: &ThinkingSupport{
-			Levels: []string{"high", "max"},
-		},
-	},
-}
-
 // AntigravityWebSearchModelFor returns the Antigravity model that should run a
 // native web search request for modelID.
 func AntigravityWebSearchModelFor(modelID string) string {
@@ -291,6 +177,9 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 		codexBuiltinImage25FlareModelInfo(),
 		codexBuiltinImage25SunburstModelInfo(),
 		codexBuiltinImage25ModelInfo(),
+		codexBuiltinImage26FlareModelInfo(),
+		codexBuiltinImage26SunburstModelInfo(),
+		codexBuiltinImage26ModelInfo(),
 	)
 	for _, model := range models {
 		if model != nil && model.ID == "gpt-6.1-terra" {
@@ -316,7 +205,7 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 // WithXAIBuiltins injects hard-coded xAI image, video, and speech model definitions
 // that should not depend on remote models.json updates.
 func WithXAIBuiltins(models []*ModelInfo) []*ModelInfo {
-	return upsertModelInfos(models, xaiBuiltinImageModelInfo(), xaiBuiltinImageQualityModelInfo(), xaiBuiltinImage20ModelInfo(), xaiBuiltinVideoModelInfo(), xaiBuiltinVideo15ModelInfo(), xaiBuiltinVideo15PreviewModelInfo(), xaiBuiltinSpeechModelInfo(), xaiBuiltinSpeechVoiceModelInfo())
+	return upsertModelInfos(models, xaiBuiltinImageModelInfo(), xaiBuiltinImageQualityModelInfo(), xaiBuiltinImage20ModelInfo(), xaiBuiltinVideoModelInfo(), xaiBuiltinVideo15ModelInfo(), xaiBuiltinVideo15PreviewModelInfo(), xaiBuiltinVideo15LiteModelInfo(), xaiBuiltinSpeechModelInfo(), xaiBuiltinSpeechVoiceModelInfo())
 }
 
 func normalizeAntigravityCapabilityModelID(modelID string) string {
@@ -384,6 +273,42 @@ func codexBuiltinImage25ModelInfo() *ModelInfo {
 		Type:        "openai",
 		DisplayName: "GPT Image 2.5",
 		Version:     codexBuiltinImage25ModelID,
+	}
+}
+
+func codexBuiltinImage26FlareModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage26FlareModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.6 Flare",
+		Version:     codexBuiltinImage26FlareModelID,
+	}
+}
+
+func codexBuiltinImage26SunburstModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage26SunburstModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.6 Sunburst",
+		Version:     codexBuiltinImage26SunburstModelID,
+	}
+}
+
+func codexBuiltinImage26ModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          codexBuiltinImage26ModelID,
+		Object:      "model",
+		Created:     1704067200, // 2024-01-01
+		OwnedBy:     "openai",
+		Type:        "openai",
+		DisplayName: "GPT Image 2.6",
+		Version:     codexBuiltinImage26ModelID,
 	}
 }
 
@@ -462,6 +387,21 @@ func xaiBuiltinVideo15PreviewModelInfo() *ModelInfo {
 		DisplayName: "Grok Imagine Video 1.5 Preview",
 		Name:        xaiBuiltinVideo15PreviewID,
 		Description: "Compatibility alias for the xAI Grok video generation model.",
+	}
+}
+
+func xaiBuiltinVideo15LiteModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:                        xaiBuiltinVideo15LiteModelID,
+		Object:                    "model",
+		Created:                   1787702400, // 2026-08-26
+		OwnedBy:                   "xai",
+		Type:                      "xai",
+		DisplayName:               "Grok Imagine Video 1.5 Lite",
+		Name:                      xaiBuiltinVideo15LiteModelID,
+		Description:               "xAI Grok Imagine Video 1.5 Lite supports text-to-video and image-to-video generation. Output pricing per second: $0.02 at 480p, $0.03 at 720p, and $0.14 at 1080p.",
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"video"},
 	}
 }
 
@@ -563,56 +503,74 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 //   - antigravity
 //   - xai
 //   - devin
+//   - copilot
 //   - meta
 func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
-	key := strings.ToLower(strings.TrimSpace(channel))
-	switch key {
+	return cloneModelInfos(staticModelDefinitionsByChannel(strings.ToLower(strings.TrimSpace(channel))))
+}
+
+// staticModelDefinitionsByChannel returns read-only catalog entries for a normalized channel.
+func staticModelDefinitionsByChannel(channel string) []*ModelInfo {
+	data := getModels()
+	if data == nil {
+		data = &staticModelsJSON{}
+	}
+	switch channel {
 	case "claude":
-		return GetClaudeModels()
-	case "gemini":
-		return GetGeminiModels()
-	case "gemini-interactions":
-		return GetGeminiModels()
+		return data.Claude
+	case "gemini", "gemini-interactions":
+		return data.Gemini
 	case "vertex":
-		return GetGeminiVertexModels()
+		return data.Vertex
 	case "aistudio":
-		return GetAIStudioModels()
+		return data.AIStudio
 	case "codex":
-		return GetCodexProModels()
+		return WithCodexBuiltins(withModelFallbacks(slices.Clone(data.CodexPro), codexPaidModelFallbacks))
 	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
-		return GetKimiModels()
+		return data.Kimi
 	case "antigravity":
-		return GetAntigravityModels()
+		return withModelFallbacks(slices.Clone(data.Antigravity), antigravityModelFallbacks)
 	case "xai", "x-ai", "grok":
-		return GetXAIModels()
+		return WithXAIBuiltins(data.XAI)
+	case "copilot":
+		return data.Copilot
 	case "devin":
-		return GetDevinModels()
+		return devinModelDefinitions()
 	case "meta", "muse":
-		return GetMetaModels()
+		return data.Meta
 	default:
 		return nil
 	}
 }
 
 // LookupStaticModelInfoByChannel searches one provider-specific static section.
+// A channel-qualified query can also match a bare catalog ID.
 // It does not fall back across providers, so callers can preserve provenance.
 func LookupStaticModelInfoByChannel(modelID, channel string) *ModelInfo {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return nil
 	}
-	models := GetStaticModelDefinitionsByChannel(channel)
-	for _, model := range models {
-		if model != nil && model.ID == modelID {
-			return cloneModelInfo(model)
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	models := staticModelDefinitionsByChannel(channel)
+	if model := findStaticModel(models, modelID); model != nil {
+		return cloneModelInfo(model)
+	}
+	if prefix, nativeID, qualified := strings.Cut(modelID, "/"); qualified && nativeID != "" && strings.EqualFold(prefix, channel) {
+		model := findStaticModel(models, nativeID)
+		if lowerID := strings.ToLower(nativeID); model == nil && lowerID != nativeID {
+			model = findStaticModel(models, lowerID)
+		}
+		if model != nil {
+			info := cloneModelInfo(model)
+			info.ID = channel + "/" + info.ID
+			return info
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(channel), "claude") {
+	if channel == "claude" {
 		for _, familyID := range claudeFamilyModelIDs(modelID) {
-			for _, model := range models {
-				if model != nil && model.ID == familyID {
-					return cloneModelInfo(model)
-				}
+			if model := findStaticModel(models, familyID); model != nil {
+				return cloneModelInfo(model)
 			}
 		}
 	}
@@ -627,12 +585,25 @@ func GetMetaModels() []*ModelInfo {
 // LookupStaticModelInfo searches all static model definitions for a model by ID.
 // Returns nil if no matching model is found.
 func LookupStaticModelInfo(modelID string) *ModelInfo {
+	return lookupStaticModelInfo(modelID, devinModelDefinitions())
+}
+
+func lookupStaticModelInfo(modelID string, additionalCatalog []*ModelInfo) *ModelInfo {
+	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return nil
 	}
+	if channel, _, qualified := strings.Cut(modelID, "/"); qualified {
+		if info := LookupStaticModelInfoByChannel(modelID, channel); info != nil {
+			return info
+		}
+	}
 
 	data := getModels()
-	allModels := [][]*ModelInfo{
+	if data == nil {
+		data = &staticModelsJSON{}
+	}
+	for _, models := range [][]*ModelInfo{
 		data.Claude,
 		data.Gemini,
 		data.Vertex,
@@ -641,27 +612,27 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Kimi,
 		data.Antigravity,
 		data.XAI,
-		GetDevinModels(),
-		GetMetaModels(),
-	}
-	for _, models := range allModels {
-		for _, m := range models {
-			if m != nil && m.ID == modelID {
-				return cloneModelInfo(m)
-			}
+		data.Meta,
+		data.Copilot,
+		// Keep the existing lookup order for bare IDs shared with independent catalogs.
+		additionalCatalog,
+	} {
+		if model := findStaticModel(models, modelID); model != nil {
+			return cloneModelInfo(model)
 		}
 	}
+	if strings.HasPrefix(modelID, "claude-") {
+		return LookupStaticModelInfoByChannel(modelID, "claude")
+	}
+	return nil
+}
 
-	// Dated and bracketed Claude variants (claude-sonnet-5-5-20261001,
-	// claude-opus-5-5[1m]) share the capabilities of their catalog entry.
-	for _, familyID := range claudeFamilyModelIDs(modelID) {
-		for _, m := range data.Claude {
-			if m != nil && m.ID == familyID {
-				return cloneModelInfo(m)
-			}
+func findStaticModel(models []*ModelInfo, modelID string) *ModelInfo {
+	for _, model := range models {
+		if model != nil && model.ID == modelID {
+			return model
 		}
 	}
-
 	return nil
 }
 

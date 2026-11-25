@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 const (
@@ -65,7 +65,7 @@ func TestOpenAIResponsesToAntigravityRegistryCarriesTheRefusal(t *testing.T) {
 			if !errors.As(envelope.Err, &unsupported) || unsupported.Type != "input_file" || unsupported.StatusCode() != 400 {
 				t.Fatalf("envelope.Err = %v, want unsupported content part: input_file; body = %s", envelope.Err, envelope.Body)
 			}
-			if !gjson.ValidBytes(envelope.Body) {
+			if !ojson.ValidBytes(envelope.Body) {
 				t.Fatalf("body is not JSON: %q", envelope.Body)
 			}
 
@@ -85,7 +85,7 @@ func TestOpenAIResponsesToAntigravityKeepsTurnWithTextBesideFileID(t *testing.T)
 	if envelope.Err != nil {
 		t.Fatalf("envelope.Err = %v", envelope.Err)
 	}
-	if got := gjson.GetBytes(envelope.Body, "request.contents.2.parts.0.text").String(); got != "keep me" {
+	if got := ojson.GetBytesNoCopy(envelope.Body, "request.contents.2.parts.0.text").String(); got != "keep me" {
 		t.Fatalf("text was lost: %s", envelope.Body)
 	}
 }
@@ -97,14 +97,42 @@ func TestOpenAIResponsesToAntigravityInlineFileStaysInlineData(t *testing.T) {
 	if envelope.Err != nil {
 		t.Fatalf("envelope.Err = %v", envelope.Err)
 	}
-	if got := gjson.GetBytes(envelope.Body, "request.contents.2.parts.0.inline_data.mime_type").String(); got != "application/pdf" {
-		t.Fatalf("inline file was not kept: %s", envelope.Body)
+	part := ojson.GetBytesNoCopy(envelope.Body, "request.contents.2.parts.0")
+	if got := part.Get("inlineData.mimeType").String(); got != "application/pdf" {
+		t.Fatalf("inline file was not kept with canonical keys: %s", envelope.Body)
+	}
+	if part.Get("inline_data").Exists() || part.Get("inlineData.mime_type").Exists() {
+		t.Fatalf("inline file contains non-canonical media keys: %s", envelope.Body)
 	}
 }
 
-func TestConvertOpenAIResponsesRequestToAntigravity_ExportedWrapperKeepsAJSONBody(t *testing.T) {
+func TestOpenAIResponsesToAntigravityRemoteFileUsesCanonicalFileData(t *testing.T) {
+	input := antigravityTurnPayload("", antigravityUserTurn(`{"type":"input_file","file_url":"https://example.com/report.pdf","format":"pdf"}`))
+	envelope := sdktranslator.TranslateRequestEnvelope(context.Background(), sdktranslator.FormatOpenAIResponse, sdktranslator.FormatAntigravity,
+		sdktranslator.RequestEnvelope{Format: sdktranslator.FormatOpenAIResponse, Model: "gemini-3-flash", Body: input})
+	if envelope.Err != nil {
+		t.Fatalf("envelope.Err = %v", envelope.Err)
+	}
+	part := ojson.GetBytesNoCopy(envelope.Body, "request.contents.0.parts.0")
+	if got := part.Get("fileData.mimeType").String(); got != "application/pdf" {
+		t.Fatalf("fileData.mimeType = %q, want application/pdf. Output: %s", got, envelope.Body)
+	}
+	if got := part.Get("fileData.fileUri").String(); got != "https://example.com/report.pdf" {
+		t.Fatalf("fileData.fileUri = %q, want remote URL. Output: %s", got, envelope.Body)
+	}
+	if part.Get("file_data").Exists() || part.Get("fileData.mime_type").Exists() || part.Get("fileData.file_uri").Exists() {
+		t.Fatalf("remote file contains non-canonical media keys: %s", envelope.Body)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestToAntigravity_ExportedWrapperCarriesTheRefusal(t *testing.T) {
 	input := antigravityTurnPayload("", antigravityUserTurn(antigravityTurnFileID))
-	if body, _ := ConvertOpenAIResponsesRequestToAntigravity("gemini-3-flash", input, false); !gjson.ValidBytes(body) {
+	body, err := ConvertOpenAIResponsesRequestToAntigravity("gemini-3-flash", input, false)
+	var unsupported *translatorcommon.UnsupportedPartError
+	if !errors.As(err, &unsupported) || unsupported.Type != "input_file" || unsupported.StatusCode() != 400 {
+		t.Fatalf("err = %v, want unsupported content part: input_file with status 400", err)
+	}
+	if !ojson.ValidBytes(body) {
 		t.Fatalf("body is not JSON: %q", body)
 	}
 }

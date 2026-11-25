@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 func TestClaudeExecutorT3CodePreservesNativeWire(t *testing.T) {
@@ -42,10 +42,10 @@ func TestClaudeExecutorT3CodePreservesNativeWire(t *testing.T) {
 				if scheduled {
 					suffix = ", workload/cron"
 				}
-				userAgent := "claude-cli/2.1.316 (external, t3-code, agent-sdk/0.3.276" + suffix + ")"
+				userAgent := "claude-cli/2.1.321 (external, t3-code, agent-sdk/0.3.276" + suffix + ")"
 				incoming := claudeNativeHelperHeaders("claude-code-20250219,"+claudeNativeHelperCoreBetas+",extended-cache-ttl-2025-04-11", "gzip, deflate, br, zstd")
 				incoming.Set("User-Agent", userAgent)
-				payload := []byte(`{"model":"claude-sonnet-5-5","max_tokens":1024,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.316; cc_entrypoint=t3-code;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"Caller instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}],"tools":[{"name":"Bash","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"metadata":{"user_id":` + fmt.Sprintf("%q", claudeNativeHelperUserID) + `}}`)
+				payload := []byte(`{"model":"claude-sonnet-5-5","max_tokens":1024,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.321; cc_entrypoint=t3-code;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.","cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"Caller instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}],"tools":[{"name":"Bash","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"metadata":{"user_id":` + fmt.Sprintf("%q", claudeNativeHelperUserID) + `}}`)
 				executor := NewClaudeExecutor(&config.Config{})
 				request := cliproxyexecutor.Request{Model: "claude-sonnet-5-5", Payload: payload}
 				options := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, OriginalRequest: payload, Headers: incoming}
@@ -74,29 +74,29 @@ func TestClaudeExecutorT3CodePreservesNativeWire(t *testing.T) {
 					t.Fatalf("User-Agent = %q, want %q", got, userAgent)
 				}
 				if mode == "count" {
-					if got := gjson.GetBytes(body, "system.#").Int(); got != 2 {
+					if got := ojson.GetBytes(body, "system.#").Int(); got != 2 {
 						t.Fatalf("count system blocks = %d, want 2 (billing excluded)", got)
 					}
 					for i := 0; i < 2; i++ {
-						if got, want := gjson.GetBytes(body, fmt.Sprintf("system.%d", i)).Raw, gjson.GetBytes(payload, fmt.Sprintf("system.%d", i+1)).Raw; got != want {
+						if got, want := ojson.GetBytes(body, fmt.Sprintf("system.%d", i)).Raw, ojson.GetBytes(payload, fmt.Sprintf("system.%d", i+1)).Raw; got != want {
 							t.Fatalf("count system block changed: got %s, want %s", got, want)
 						}
 					}
 				} else {
-					if got := gjson.GetBytes(body, "system.0.text").String(); !strings.Contains(got, "cc_entrypoint=t3-code;") {
+					if got := ojson.GetBytes(body, "system.0.text").String(); !strings.Contains(got, "cc_entrypoint=t3-code;") {
 						t.Fatalf("billing attribution changed: %q", got)
 					}
-					if got := gjson.GetBytes(body, "system.#").Int(); got != 3 {
+					if got := ojson.GetBytes(body, "system.#").Int(); got != 3 {
 						t.Fatalf("system blocks = %d, want 3", got)
 					}
 					for _, path := range []string{"system.1", "system.2"} {
-						if got, want := gjson.GetBytes(body, path).Raw, gjson.GetBytes(payload, path).Raw; got != want {
+						if got, want := ojson.GetBytes(body, path).Raw, ojson.GetBytes(payload, path).Raw; got != want {
 							t.Fatalf("%s changed: got %s, want %s", path, got, want)
 						}
 					}
 				}
 				for _, path := range []string{"tools", "messages"} {
-					if got, want := gjson.GetBytes(body, path).Raw, gjson.GetBytes(payload, path).Raw; got != want {
+					if got, want := ojson.GetBytes(body, path).Raw, ojson.GetBytes(payload, path).Raw; got != want {
 						t.Fatalf("%s changed: got %s, want %s", path, got, want)
 					}
 				}

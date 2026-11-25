@@ -15,6 +15,12 @@ const RequestedModelMetadataKey = "requested_model"
 // It is optional and may be absent for non-HTTP executions.
 const RequestPathMetadataKey = "request_path"
 
+// RequestIDMetadataKey stores the host request lifecycle identifier in Options.Metadata.
+const RequestIDMetadataKey = "request_id"
+
+// TraceIDMetadataKey stores the inbound request trace identifier in Options.Metadata.
+const TraceIDMetadataKey = "trace_id"
+
 // DisallowFreeAuthMetadataKey instructs auth selection to skip known free-tier credentials.
 const DisallowFreeAuthMetadataKey = "disallow_free_auth"
 
@@ -34,6 +40,8 @@ const GenerateMetadataKey = "generate"
 const (
 	// PinnedAuthMetadataKey locks execution to a specific auth ID.
 	PinnedAuthMetadataKey = "pinned_auth_id"
+	// ExcludedAuthIDsMetadataKey excludes specific auth IDs from selection for the current attempt.
+	ExcludedAuthIDsMetadataKey = "excluded_auth_ids"
 	// SelectionIDMetadataKey stores the per-selection ID generated for a plugin scheduler pick.
 	SelectionIDMetadataKey = "selection_id"
 	// SelectedAuthMetadataKey stores the auth ID selected by the scheduler.
@@ -44,6 +52,8 @@ const (
 	SelectedAuthIndexMetadataKey = "selected_auth_index"
 	// SelectedAuthIndexCallbackMetadataKey carries an optional callback invoked with the selected auth index.
 	SelectedAuthIndexCallbackMetadataKey = "selected_auth_index_callback"
+	// FinalizedResponseFormatCallbackMetadataKey carries an optional callback invoked with the effective response_format after payload rules.
+	FinalizedResponseFormatCallbackMetadataKey = "finalized_response_format_callback"
 	// ExecutionSessionMetadataKey identifies a long-lived downstream execution session.
 	ExecutionSessionMetadataKey = "execution_session_id"
 	// DerivedSessionIDMetadataKey stores a stable session identity inferred from request context.
@@ -100,6 +110,9 @@ type Request struct {
 	Metadata map[string]any
 }
 
+// RequestBeforeAuthInterceptor rewrites a follow-up request on a bound session before after-auth interception.
+type RequestBeforeAuthInterceptor func(context.Context, RequestAfterAuthInterceptRequest) RequestAfterAuthInterceptResponse
+
 // RequestAfterAuthInterceptor rewrites a request after credential selection and before executor translation.
 type RequestAfterAuthInterceptor func(context.Context, RequestAfterAuthInterceptRequest) RequestAfterAuthInterceptResponse
 
@@ -135,6 +148,11 @@ type RequestAfterAuthInterceptResponse struct {
 	ClearHeaders []string
 	// Terminate prevents the selected executor from receiving the request.
 	Terminate bool
+	// TerminateScope narrows Terminate for after-auth interceptors.
+	// Empty or "request" terminates the whole request; "credential" refuses only
+	// the selected credential for this request so selection continues with the
+	// next candidate. Unknown values behave as "request".
+	TerminateScope string
 	// StatusCode is the downstream HTTP status used when Terminate is true.
 	StatusCode int
 	// ResponseHeaders contains downstream response headers used when Terminate is true.
@@ -216,6 +234,8 @@ type Options struct {
 	ResponseFormat sdktranslator.Format
 	// Metadata carries extra execution hints shared across selection and executors.
 	Metadata map[string]any
+	// RequestBeforeAuthInterceptor runs before after-auth interception on bound follow-up turns.
+	RequestBeforeAuthInterceptor RequestBeforeAuthInterceptor
 	// RequestAfterAuthInterceptor runs after credential selection and before executor translation.
 	RequestAfterAuthInterceptor RequestAfterAuthInterceptor
 	// WebSocketResponseObserver receives upstream WebSocket response events during execution.
@@ -250,6 +270,9 @@ func ResponseFormatOrSource(opts Options) sdktranslator.Format {
 type Response struct {
 	// Payload is the provider response in the executor format.
 	Payload []byte
+	// Incomplete reports that the upstream execution terminated in an incomplete state
+	// (e.g., response.incomplete) even if translated into a normal non-stream payload.
+	Incomplete bool
 	// Metadata exposes optional structured data for translators.
 	Metadata map[string]any
 	// Headers carries upstream HTTP response headers for passthrough to clients.
@@ -260,6 +283,9 @@ type Response struct {
 type StreamChunk struct {
 	// Payload is the raw provider chunk payload.
 	Payload []byte
+	// Incomplete reports that the upstream stream ended in an incomplete terminal state
+	// (e.g., response.incomplete) even if protocol translation mapped it to a normal chunk.
+	Incomplete bool
 	// Err reports any terminal error encountered while producing chunks.
 	Err error
 }
@@ -296,4 +322,14 @@ type RequestScopedError interface {
 type StreamTruncatedError interface {
 	error
 	IsStreamTruncated() bool
+}
+
+// TransientRateLimitError identifies a transient per-model capacity or
+// admission rejection (for example a Codex turn_rate_limit_exceeded 429).
+// The credential's plan quota is not exhausted, so auth managers must not
+// record quota exhaustion or advance the quota exponential backoff for it.
+// The rejecting model may still cool until any provider RetryAfter hint.
+type TransientRateLimitError interface {
+	error
+	IsTransientRateLimit() bool
 }

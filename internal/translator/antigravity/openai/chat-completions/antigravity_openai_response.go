@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	translatorcommon "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/common"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/MoeForge/moego/ojson"
 	. "github.com/router-for-me/CLIProxyAPI/v8/internal/translator/gemini/openai/chat-completions"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // convertCliResponseToOpenAIChatParams holds parameters for response conversion.
@@ -33,6 +33,20 @@ type convertCliResponseToOpenAIChatParams struct {
 	ResponseID           string
 	PendingUsageMetadata []byte
 	SanitizedNameMap     map[string]string
+	ActiveToolCall       *antigravityOpenAIToolCall
+	ToolCallsByID        map[string]*antigravityOpenAIToolCall
+	ToolCalls            []*antigravityOpenAIToolCall
+}
+
+type antigravityOpenAIToolCall struct {
+	Index             int
+	RawName           string
+	UpstreamID        string
+	Streaming         bool
+	Assembler         *translatorcommon.VertexPartialArgsAssembler
+	ArgumentsStarted  bool
+	ArgumentsHasItems bool
+	ArgumentsClosed   bool
 }
 
 // functionCallIDCounter provides a process-wide unique counter for function call identifiers.
@@ -72,75 +86,97 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 		if params.SawResponse && !params.SawFinishReason {
 			params.SawFinishReason = true
 			finishReason, nativeFinishReason := resolveOpenAIFinishReason(params)
-			template := []byte(`{"id":"","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}]}`)
-			template, _ = sjson.SetBytes(template, "created", params.UnixTimestamp)
-			if params.ModelVersion != "" {
-				template, _ = sjson.SetBytes(template, "model", params.ModelVersion)
-			}
-			if params.ResponseID != "" {
-				template, _ = sjson.SetBytes(template, "id", params.ResponseID)
-			}
+			var pendingUsage ojson.Result
 			if len(params.PendingUsageMetadata) > 0 {
-				template = setOpenAIUsageMetadata(template, gjson.ParseBytes(params.PendingUsageMetadata))
+				pendingUsage = util.ParseGJSONBytesNoCopy(params.PendingUsageMetadata)
 			}
-			template, _ = sjson.SetBytes(template, "choices.0.finish_reason", finishReason)
-			template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", nativeFinishReason)
-			return [][]byte{template}
+			terminalDoc := buildAntigravityOpenAITerminalChunkDoc(params, finishReason, nativeFinishReason, pendingUsage)
+			if hasOpenAntigravityOpenAIToolArguments(params) {
+				closeDoc := ojson.NewDoc([]byte(`{"id":"","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}`))
+				if appendAntigravityOpenAIToolCallCloses(closeDoc, params) {
+					params.ActiveToolCall = nil
+					_ = closeDoc.Set("created", params.UnixTimestamp)
+					if params.ModelVersion != "" {
+						_ = closeDoc.Set("model", params.ModelVersion)
+					}
+					if params.ResponseID != "" {
+						_ = closeDoc.Set("id", params.ResponseID)
+					}
+					return [][]byte{closeDoc.Bytes(), terminalDoc.Bytes()}
+				}
+			}
+			return [][]byte{terminalDoc.Bytes()}
 		}
 		return [][]byte{}
 	}
 
 	if !params.SawResponse {
-		params.SawResponse = hasAntigravityResponsePayload(rawJSON)
+		params.SawResponse = translatorcommon.HasAntigravityResponsePayload(rawJSON)
 	}
 
 	// Initialize the OpenAI SSE template.
-	template := []byte(`{"id":"","object":"chat.completion.chunk","created":12345,"model":"model","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}`)
+	templateDoc := ojson.NewDoc([]byte(`{"id":"","object":"chat.completion.chunk","created":12345,"model":"model","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning_content":null},"finish_reason":null,"native_finish_reason":null}]}`))
 
 	// Extract and set the model version.
-	if modelVersionResult := gjson.GetBytes(rawJSON, "response.modelVersion"); modelVersionResult.Exists() {
-		params.ModelVersion = modelVersionResult.String()
-		template, _ = sjson.SetBytes(template, "model", params.ModelVersion)
+	if modelVersionResult := ojson.GetBytesNoCopy(rawJSON, "response.modelVersion"); modelVersionResult.Exists() {
+		params.ModelVersion = strings.Clone(modelVersionResult.String())
+		_ = templateDoc.Set("model", params.ModelVersion)
+	} else if params.ModelVersion != "" {
+		_ = templateDoc.Set("model", params.ModelVersion)
 	}
 
 	// Extract and set the creation timestamp.
-	if createTimeResult := gjson.GetBytes(rawJSON, "response.createTime"); createTimeResult.Exists() {
+	if createTimeResult := ojson.GetBytesNoCopy(rawJSON, "response.createTime"); createTimeResult.Exists() {
 		t, err := time.Parse(time.RFC3339Nano, createTimeResult.String())
 		if err == nil {
 			params.UnixTimestamp = t.Unix()
 		}
-		template, _ = sjson.SetBytes(template, "created", params.UnixTimestamp)
+		_ = templateDoc.Set("created", params.UnixTimestamp)
 	} else {
-		template, _ = sjson.SetBytes(template, "created", params.UnixTimestamp)
+		_ = templateDoc.Set("created", params.UnixTimestamp)
 	}
 
 	// Extract and set the response ID.
-	if responseIDResult := gjson.GetBytes(rawJSON, "response.responseId"); responseIDResult.Exists() {
-		params.ResponseID = responseIDResult.String()
-		template, _ = sjson.SetBytes(template, "id", params.ResponseID)
+	if responseIDResult := ojson.GetBytesNoCopy(rawJSON, "response.responseId"); responseIDResult.Exists() {
+		params.ResponseID = strings.Clone(responseIDResult.String())
+		_ = templateDoc.Set("id", params.ResponseID)
+	} else if params.ResponseID != "" {
+		_ = templateDoc.Set("id", params.ResponseID)
 	}
 
 	// Cache the finish reason - do NOT set it in output yet (will be set on final chunk)
-	if finishReasonResult := gjson.GetBytes(rawJSON, "response.candidates.0.finishReason"); finishReasonResult.Exists() {
-		params.UpstreamFinishReason = strings.ToUpper(finishReasonResult.String())
+	if finishReasonResult := ojson.GetBytesNoCopy(rawJSON, "response.candidates.0.finishReason"); finishReasonResult.Exists() {
+		params.UpstreamFinishReason = strings.Clone(strings.ToUpper(finishReasonResult.String()))
 	}
 
-	// Extract and set usage metadata (token counts). FilterSSEUsageMetadata renames
+	// Extract usage metadata (token counts). FilterSSEUsageMetadata renames
 	// non-terminal usage to cpaUsageMetadata, so retain the latest copy for [DONE]
 	// instead of treating an intermediate chunk as terminal.
-	usageResult := gjson.GetBytes(rawJSON, "response.usageMetadata")
+	usageResult := ojson.GetBytesNoCopy(rawJSON, "response.usageMetadata")
 	if !usageResult.Exists() {
-		if pendingUsage := gjson.GetBytes(rawJSON, "response.cpaUsageMetadata"); pendingUsage.Exists() {
+		if pendingUsage := ojson.GetBytesNoCopy(rawJSON, "response.cpaUsageMetadata"); pendingUsage.Exists() {
 			params.PendingUsageMetadata = append(params.PendingUsageMetadata[:0], pendingUsage.Raw...)
 		}
-	} else {
-		template = setOpenAIUsageMetadata(template, usageResult)
 	}
 
 	// Process the main content part of the response.
-	partsResult := gjson.GetBytes(rawJSON, "response.candidates.0.content.parts")
+	hasDeltaContent := false
+	hasNonEmptyDelta := false
+	partsResult := ojson.GetBytesNoCopy(rawJSON, "response.candidates.0.content.parts")
 	if partsResult.IsArray() {
 		partResults := partsResult.Array()
+		hasToolCallsArray := false
+		ensureToolCallsArray := func() {
+			if !hasToolCallsArray {
+				_ = templateDoc.SetRaw("choices.0.delta.tool_calls", `[]`)
+				hasToolCallsArray = true
+			}
+		}
+		imageCount := 0
+		var textContent strings.Builder
+		var reasoningContent strings.Builder
+		hasTextContent := false
+		hasReasoningContent := false
 		for i := 0; i < len(partResults); i++ {
 			partResult := partResults[i]
 			partTextResult := partResult.Get("text")
@@ -155,7 +191,8 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 			}
 
 			hasThoughtSignature := thoughtSignatureResult.Exists() && thoughtSignatureResult.String() != ""
-			hasContentPayload := partTextResult.Exists() || functionCallResult.Exists() || inlineDataResult.Exists()
+			hasTextPayload := partTextResult.Exists() && partTextResult.String() != ""
+			hasContentPayload := hasTextPayload || functionCallResult.Exists() || inlineDataResult.Exists()
 
 			// Ignore encrypted thoughtSignature but keep any actual content in the same part.
 			if hasThoughtSignature && !hasContentPayload {
@@ -163,40 +200,195 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 			}
 
 			if partTextResult.Exists() {
-				textContent := partTextResult.String()
+				text := partTextResult.String()
+				if text != "" && hasOpenAntigravityOpenAIToolArguments(params) {
+					if appendAntigravityOpenAIToolCallCloses(templateDoc, params) {
+						hasToolCallsArray = true
+					}
+					params.ActiveToolCall = nil
+				}
 
 				// Handle text content, distinguishing between regular content and reasoning/thoughts.
 				if partResult.Get("thought").Bool() {
-					template, _ = sjson.SetBytes(template, "choices.0.delta.reasoning_content", textContent)
+					hasReasoningContent = true
+					reasoningContent.WriteString(text)
 				} else {
-					template, _ = sjson.SetBytes(template, "choices.0.delta.content", textContent)
+					hasTextContent = true
+					textContent.WriteString(text)
 				}
-				template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
+				_ = templateDoc.Set("choices.0.delta.role", "assistant")
 			} else if functionCallResult.Exists() {
 				// Handle function call content.
-				(*param).(*convertCliResponseToOpenAIChatParams).SawToolCall = true // Persist across chunks
-				toolCallsResult := gjson.GetBytes(template, "choices.0.delta.tool_calls")
-				functionCallIndex := (*param).(*convertCliResponseToOpenAIChatParams).FunctionIndex
-				(*param).(*convertCliResponseToOpenAIChatParams).FunctionIndex++
-				if !toolCallsResult.IsArray() {
-					template, _ = sjson.SetRawBytes(template, "choices.0.delta.tool_calls", []byte(`[]`))
+				rawName := strings.TrimSpace(functionCallResult.Get("name").String())
+				upstreamID := strings.TrimSpace(functionCallResult.Get("id").String())
+				willContinue := translatorcommon.VertexFunctionCallWillContinue(functionCallResult)
+				explicitEnd := antigravityOpenAIExplicitlyEndsContinuation(functionCallResult)
+				hasPartialArgs := antigravityOpenAIHasPartialArgs(functionCallResult)
+
+				active := params.ActiveToolCall
+				if upstreamID != "" {
+					if params.ToolCallsByID != nil {
+						active = params.ToolCallsByID[upstreamID]
+					} else {
+						active = nil
+					}
 				}
 
-				functionCallTemplate := []byte(`{"id": "","index": 0,"type": "function","function": {"name": "","arguments": ""}}`)
-				fcName := util.RestoreSanitizedToolName((*param).(*convertCliResponseToOpenAIChatParams).SanitizedNameMap, functionCallResult.Get("name").String())
-				fcID := strings.TrimSpace(functionCallResult.Get("id").String())
+				if active != nil && active.canContinuePartialArgs(functionCallResult) {
+					params.SawToolCall = true
+					argumentDelta, done := active.Assembler.PushFunctionCall(functionCallResult)
+					if active.Assembler.Err() != nil {
+						active.Assembler = nil
+						active.ArgumentsClosed = true
+						if params.ActiveToolCall == active {
+							params.ActiveToolCall = nil
+						}
+						continue
+					}
+					if argumentDelta != "" {
+						active.ArgumentsStarted = true
+						ensureToolCallsArray()
+						appendAntigravityOpenAIToolCallDelta(templateDoc, active.Index, argumentDelta)
+						_ = templateDoc.Set("choices.0.delta.role", "assistant")
+					}
+					if done {
+						active.Assembler = nil
+						active.ArgumentsClosed = true
+					}
+					params.ActiveToolCall = active
+					continue
+				}
+
+				if rawName == "" {
+					if active != nil {
+						params.SawToolCall = true
+						var argumentDelta string
+						switch {
+						case !active.ArgumentsClosed && hasPartialArgs && !active.ArgumentsStarted:
+							active.Assembler = translatorcommon.NewVertexPartialArgsAssembler()
+							var done bool
+							argumentDelta, done = active.Assembler.PushFunctionCall(functionCallResult)
+							if active.Assembler.Err() != nil {
+								active.Assembler = nil
+								active.ArgumentsClosed = true
+								continue
+							}
+							if argumentDelta != "" {
+								active.ArgumentsStarted = true
+							}
+							if done {
+								active.Assembler = nil
+								active.ArgumentsClosed = true
+							}
+						case active.ArgumentsClosed && hasPartialArgs:
+							lateAssembler := translatorcommon.NewVertexPartialArgsAssembler()
+							var done bool
+							argumentDelta, done = lateAssembler.PushFunctionCall(functionCallResult)
+							if lateAssembler.Err() != nil {
+								continue
+							}
+							if !done {
+								active.Assembler = lateAssembler
+								active.Streaming = true
+								active.ArgumentsStarted = argumentDelta != ""
+								active.ArgumentsClosed = false
+							}
+						case active.ArgumentsClosed:
+							argumentDelta = antigravityOpenAILateContinuationArguments(functionCallResult.Get("args"))
+						default:
+							argumentDelta = antigravityOpenAIContinuationArguments(active, functionCallResult.Get("args"))
+							if explicitEnd && !active.ArgumentsClosed {
+								if active.ArgumentsStarted {
+									argumentDelta += "}"
+								} else if active.Streaming {
+									argumentDelta = "{}"
+									active.ArgumentsStarted = true
+								}
+								active.ArgumentsClosed = true
+							}
+						}
+						if argumentDelta != "" {
+							ensureToolCallsArray()
+							appendAntigravityOpenAIToolCallDelta(templateDoc, active.Index, argumentDelta)
+							_ = templateDoc.Set("choices.0.delta.role", "assistant")
+						}
+						params.ActiveToolCall = active
+						continue
+					}
+					if !functionCallResult.Get("args").Exists() && !hasPartialArgs {
+						continue
+					}
+				}
+
+				var partialAssembler *translatorcommon.VertexPartialArgsAssembler
+				var partialDelta string
+				var partialDone bool
+				if hasPartialArgs {
+					partialAssembler = translatorcommon.NewVertexPartialArgsAssembler()
+					partialDelta, partialDone = partialAssembler.PushFunctionCall(functionCallResult)
+					if partialAssembler.Err() != nil {
+						continue
+					}
+				}
+
+				params.SawToolCall = true // Persist across chunks
+				ensureToolCallsArray()
+
+				functionCallIndex := params.FunctionIndex
+				params.FunctionIndex++
+				fcDoc := ojson.NewDocString(`{"id":"","index":0,"type":"function","function":{"name":"","arguments":"{}"}}`)
+				fcName := util.RestoreSanitizedToolName(params.SanitizedNameMap, rawName)
+				fcID := upstreamID
 				if fcID == "" {
 					fcID = fmt.Sprintf("%s-%d-%d", fcName, time.Now().UnixNano(), atomic.AddUint64(&functionCallIDCounter, 1))
 				}
-				functionCallTemplate, _ = sjson.SetBytes(functionCallTemplate, "id", fcID)
-				functionCallTemplate, _ = sjson.SetBytes(functionCallTemplate, "index", functionCallIndex)
-				functionCallTemplate, _ = sjson.SetBytes(functionCallTemplate, "function.name", fcName)
-				if fcArgsResult := functionCallResult.Get("args"); fcArgsResult.Exists() {
-					functionCallTemplate, _ = sjson.SetBytes(functionCallTemplate, "function.arguments", fcArgsResult.Raw)
+				active = &antigravityOpenAIToolCall{
+					Index:      functionCallIndex,
+					RawName:    rawName,
+					UpstreamID: upstreamID,
+					Streaming:  willContinue || hasPartialArgs,
 				}
-				template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
-				template, _ = sjson.SetRawBytes(template, "choices.0.delta.tool_calls.-1", functionCallTemplate)
+				switch {
+				case partialAssembler != nil:
+					_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(fcDoc, "function.arguments", partialDelta)
+					active.ArgumentsStarted = partialDelta != ""
+					if partialDone {
+						active.ArgumentsClosed = true
+					} else {
+						active.Assembler = partialAssembler
+					}
+				case functionCallResult.Get("args").Exists():
+					fcArgsResult := functionCallResult.Get("args")
+					if willContinue {
+						_ = fcDoc.Set("function.arguments", antigravityOpenAIStartArguments(active, fcArgsResult))
+					} else {
+						_ = fcDoc.Set("function.arguments", fcArgsResult.Raw)
+						active.ArgumentsStarted = true
+						active.ArgumentsClosed = true
+					}
+				case willContinue:
+					_ = fcDoc.Set("function.arguments", "")
+				default:
+					active.ArgumentsStarted = true
+					active.ArgumentsClosed = true
+				}
+				params.ActiveToolCall = active
+				params.ToolCalls = append(params.ToolCalls, active)
+				if upstreamID != "" {
+					if params.ToolCallsByID == nil {
+						params.ToolCallsByID = make(map[string]*antigravityOpenAIToolCall)
+					}
+					params.ToolCallsByID[upstreamID] = active
+				}
+				_ = fcDoc.Set("id", fcID)
+				_ = fcDoc.Set("index", functionCallIndex)
+				_ = fcDoc.Set("function.name", fcName)
+				_ = templateDoc.Set("choices.0.delta.role", "assistant")
+				_ = templateDoc.SetRawBytes("choices.0.delta.tool_calls.-1", fcDoc.Bytes())
 			} else if inlineDataResult.Exists() {
+				if partResult.Get("thought").Bool() {
+					continue
+				}
 				data := inlineDataResult.Get("data").String()
 				if data == "" {
 					continue
@@ -209,18 +401,32 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 					mimeType = "image/png"
 				}
 				imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
-				imagesResult := gjson.GetBytes(template, "choices.0.delta.images")
-				if !imagesResult.Exists() || !imagesResult.IsArray() {
-					template, _ = sjson.SetRawBytes(template, "choices.0.delta.images", []byte(`[]`))
+				if imageCount == 0 {
+					_ = templateDoc.SetRaw("choices.0.delta.images", `[]`)
 				}
-				imageIndex := len(gjson.GetBytes(template, "choices.0.delta.images").Array())
-				imagePayload := []byte(`{"type":"image_url","image_url":{"url":""}}`)
-				imagePayload, _ = sjson.SetBytes(imagePayload, "index", imageIndex)
-				imagePayload, _ = sjson.SetBytes(imagePayload, "image_url.url", imageURL)
-				template, _ = sjson.SetBytes(template, "choices.0.delta.role", "assistant")
-				template, _ = sjson.SetRawBytes(template, "choices.0.delta.images.-1", imagePayload)
+				imageIndex := imageCount
+				imageCount++
+				imageDoc := ojson.NewDoc([]byte(`{"type":"image_url","image_url":{"url":""}}`))
+				_ = imageDoc.Set("index", imageIndex)
+				_ = imageDoc.Set("image_url.url", imageURL)
+				_ = templateDoc.Set("choices.0.delta.role", "assistant")
+				_ = templateDoc.SetRawBytes("choices.0.delta.images.-1", imageDoc.Bytes())
 			}
 		}
+		if hasTextContent {
+			_ = templateDoc.Set("choices.0.delta.content", textContent.String())
+		}
+		if hasReasoningContent {
+			_ = templateDoc.Set("choices.0.delta.reasoning_content", reasoningContent.String())
+		}
+		hasDeltaContent = hasTextContent || hasReasoningContent || hasToolCallsArray || imageCount > 0
+		hasNonEmptyDelta = textContent.Len() > 0 || reasoningContent.Len() > 0 || hasToolCallsArray || imageCount > 0
+	}
+
+	if !params.SawFinishReason && params.UpstreamFinishReason != "" && usageResult.Exists() && appendAntigravityOpenAIToolCallCloses(templateDoc, params) {
+		hasDeltaContent = true
+		hasNonEmptyDelta = true
+		params.ActiveToolCall = nil
 	}
 
 	// Determine finish_reason only on the final chunk, which upstream marks with
@@ -229,41 +435,212 @@ func ConvertAntigravityResponseToOpenAI(_ context.Context, _ string, originalReq
 	// across chunks and keep streaming afterwards, and finalizing early would make
 	// strict clients drop the remaining content. When upstream never sends
 	// finishReason at all, the [DONE] branch synthesizes the terminal chunk.
-	usageMetadata := gjson.GetBytes(rawJSON, "response.usageMetadata")
-	isFinalChunk := params.UpstreamFinishReason != "" && usageMetadata.Exists()
+	isFinalChunk := !params.SawFinishReason && params.UpstreamFinishReason != "" && usageResult.Exists()
 
 	if isFinalChunk {
 		finishReason, nativeFinishReason := resolveOpenAIFinishReason(params)
-		template, _ = sjson.SetBytes(template, "choices.0.finish_reason", finishReason)
-		template, _ = sjson.SetBytes(template, "choices.0.native_finish_reason", nativeFinishReason)
 		params.SawFinishReason = true
+		terminalDoc := buildAntigravityOpenAITerminalChunkDoc(params, finishReason, nativeFinishReason, usageResult)
+		if hasNonEmptyDelta {
+			// Strict Chat Completions parsers reject chunks that combine a delta payload
+			// with a non-null finish_reason, so emit the payload chunk first and finish
+			// the choice in a dedicated terminal chunk.
+			return [][]byte{templateDoc.Bytes(), terminalDoc.Bytes()}
+		}
+		return [][]byte{terminalDoc.Bytes()}
 	}
 
-	return [][]byte{template}
+	if params.SawFinishReason && !hasNonEmptyDelta {
+		return [][]byte{}
+	}
+
+	if usageResult.Exists() {
+		setOpenAIUsageMetadataDoc(templateDoc, usageResult)
+	}
+
+	if !hasDeltaContent && !usageResult.Exists() {
+		return [][]byte{}
+	}
+
+	return [][]byte{templateDoc.Bytes()}
 }
 
-// hasAntigravityResponsePayload reports whether a chunk carries actual generated
-// content or token accounting. Presence alone is not enough: an envelope such as
-// `{}`, `{"response":{}}` or `{"response":{"candidates":[]}}` must not count as a
-// started stream, otherwise a keepalive or malformed event would be enough to
-// finalize a stream that produced nothing.
-func hasAntigravityResponsePayload(rawJSON []byte) bool {
-	for _, path := range []string{"response.candidates", "candidates"} {
-		if candidates := gjson.GetBytes(rawJSON, path); candidates.IsArray() && len(candidates.Array()) > 0 {
-			return true
-		}
+func buildAntigravityOpenAITerminalChunkDoc(params *convertCliResponseToOpenAIChatParams, finishReason, nativeFinishReason string, usageResult ojson.Result) *ojson.Doc {
+	terminalDoc := ojson.NewDoc([]byte(`{"id":"","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop","native_finish_reason":"stop"}]}`))
+	_ = terminalDoc.Set("created", params.UnixTimestamp)
+	if params.ModelVersion != "" {
+		_ = terminalDoc.Set("model", params.ModelVersion)
 	}
-	// FilterSSEUsageMetadata renames non-terminal usage to cpaUsageMetadata before
-	// the translator sees it, so both spellings must be accepted.
-	for _, path := range []string{
-		"response.usageMetadata", "response.cpaUsageMetadata",
-		"usageMetadata", "cpaUsageMetadata",
-	} {
-		if usage := gjson.GetBytes(rawJSON, path); usage.IsObject() && len(usage.Map()) > 0 {
+	if params.ResponseID != "" {
+		_ = terminalDoc.Set("id", params.ResponseID)
+	}
+	if usageResult.Exists() {
+		setOpenAIUsageMetadataDoc(terminalDoc, usageResult)
+	}
+	_ = terminalDoc.Set("choices.0.finish_reason", finishReason)
+	_ = terminalDoc.Set("choices.0.native_finish_reason", nativeFinishReason)
+	return terminalDoc
+}
+
+func antigravityOpenAIStartArguments(call *antigravityOpenAIToolCall, args ojson.Result) string {
+	if call == nil || !args.Exists() || !args.IsObject() {
+		return ""
+	}
+	raw := strings.TrimSpace(args.Raw)
+	if len(raw) < 2 || raw[0] != '{' || raw[len(raw)-1] != '}' {
+		return raw
+	}
+	call.ArgumentsStarted = true
+	members := strings.TrimSpace(raw[1 : len(raw)-1])
+	if members == "" {
+		call.ArgumentsHasItems = false
+		return "{"
+	}
+	call.ArgumentsHasItems = true
+	return "{" + members
+}
+
+func antigravityOpenAIContinuationArguments(call *antigravityOpenAIToolCall, args ojson.Result) string {
+	if call == nil || call.ArgumentsClosed || !args.Exists() || !args.IsObject() {
+		return ""
+	}
+	raw := strings.TrimSpace(args.Raw)
+	if len(raw) < 2 || raw[0] != '{' || raw[len(raw)-1] != '}' {
+		return ""
+	}
+	members := strings.TrimSpace(raw[1 : len(raw)-1])
+	if !call.ArgumentsStarted {
+		call.ArgumentsStarted = true
+		if members == "" {
+			return "{"
+		}
+		call.ArgumentsHasItems = true
+		return "{" + members
+	}
+	if members == "" {
+		return ""
+	}
+	prefix := ""
+	if call.ArgumentsHasItems {
+		prefix = ","
+	}
+	call.ArgumentsHasItems = true
+	return prefix + members
+}
+
+func antigravityOpenAIHasPartialArgs(fc ojson.Result) bool {
+	if !fc.Exists() || !fc.IsObject() {
+		return false
+	}
+	partialArgs := fc.Get("partialArgs")
+	if !partialArgs.Exists() {
+		partialArgs = fc.Get("partial_args")
+	}
+	if !partialArgs.Exists() {
+		return false
+	}
+	if partialArgs.IsArray() && len(partialArgs.Array()) == 0 && fc.Get("args").Exists() && !translatorcommon.VertexFunctionCallWillContinue(fc) {
+		return false
+	}
+	return true
+}
+
+func (c *antigravityOpenAIToolCall) canContinuePartialArgs(fc ojson.Result) bool {
+	if c == nil || c.Assembler == nil || c.ArgumentsClosed || !fc.Exists() || !fc.IsObject() {
+		return false
+	}
+	if fc.Get("args").Exists() && !translatorcommon.IsVertexStreamingFunctionCall(fc) {
+		return false
+	}
+	fcID := strings.TrimSpace(fc.Get("id").String())
+	if fcID != "" && c.UpstreamID != "" && fcID != c.UpstreamID {
+		return false
+	}
+	rawName := strings.TrimSpace(fc.Get("name").String())
+	if rawName == "" {
+		return true
+	}
+	if rawName != c.RawName {
+		return false
+	}
+	if fcID != "" && c.UpstreamID != "" && fcID == c.UpstreamID {
+		return true
+	}
+	return c.Assembler.CanAcceptContinuation(fc)
+}
+
+func antigravityOpenAILateContinuationArguments(args ojson.Result) string {
+	if !args.Exists() || !args.IsObject() {
+		return ""
+	}
+	raw := strings.TrimSpace(args.Raw)
+	if len(raw) < 2 || raw[0] != '{' || raw[len(raw)-1] != '}' {
+		return ""
+	}
+	if strings.TrimSpace(raw[1:len(raw)-1]) == "" {
+		return ""
+	}
+	return raw
+}
+
+func antigravityOpenAIExplicitlyEndsContinuation(fc ojson.Result) bool {
+	return !translatorcommon.VertexFunctionCallWillContinue(fc) &&
+		(fc.Get("willContinue").Type == ojson.False || fc.Get("will_continue").Type == ojson.False)
+}
+
+func hasOpenAntigravityOpenAIToolArguments(params *convertCliResponseToOpenAIChatParams) bool {
+	if params == nil {
+		return false
+	}
+	for _, call := range params.ToolCalls {
+		if call != nil && !call.ArgumentsClosed && (call.ArgumentsStarted || call.Streaming || call.Assembler != nil) {
 			return true
 		}
 	}
 	return false
+}
+
+func appendAntigravityOpenAIToolCallCloses(doc *ojson.Doc, params *convertCliResponseToOpenAIChatParams) bool {
+	if doc == nil || params == nil {
+		return false
+	}
+	appended := false
+	for _, call := range params.ToolCalls {
+		if call == nil || call.ArgumentsClosed {
+			continue
+		}
+		if call.Assembler != nil {
+			if call.Assembler.Err() == nil {
+				closing, _ := call.Assembler.PushFunctionCall(ojson.Parse("{}"))
+				if call.Assembler.Err() == nil && closing != "" {
+					appendAntigravityOpenAIToolCallDelta(doc, call.Index, closing)
+					appended = true
+				}
+			}
+			call.Assembler = nil
+			call.ArgumentsClosed = true
+			continue
+		}
+		if !call.ArgumentsStarted && !call.Streaming {
+			continue
+		}
+		closing := "}"
+		if !call.ArgumentsStarted {
+			closing = "{}"
+			call.ArgumentsStarted = true
+		}
+		appendAntigravityOpenAIToolCallDelta(doc, call.Index, closing)
+		call.ArgumentsClosed = true
+		appended = true
+	}
+	return appended
+}
+
+func appendAntigravityOpenAIToolCallDelta(doc *ojson.Doc, index int, arguments string) {
+	fcDoc := ojson.NewDocString(`{"index":0,"function":{"arguments":""}}`)
+	_ = fcDoc.Set("index", index)
+	_ = translatorcommon.SetStringWithoutHTMLEscapeDoc(fcDoc, "function.arguments", arguments)
+	_ = doc.SetRawBytes("choices.0.delta.tool_calls.-1", fcDoc.Bytes())
 }
 
 // resolveOpenAIFinishReason maps the cached upstream state to the OpenAI
@@ -274,7 +651,7 @@ func resolveOpenAIFinishReason(params *convertCliResponseToOpenAIChatParams) (fi
 	case params.SawToolCall:
 		finishReason = "tool_calls"
 	case params.UpstreamFinishReason == "MAX_TOKENS":
-		finishReason = "max_tokens"
+		finishReason = "length"
 	case isAntigravityContentFilterFinishReason(params.UpstreamFinishReason):
 		finishReason = "content_filter"
 	default:
@@ -296,26 +673,23 @@ func isAntigravityContentFilterFinishReason(reason string) bool {
 	}
 }
 
-func setOpenAIUsageMetadata(template []byte, usageResult gjson.Result) []byte {
+func setOpenAIUsageMetadataDoc(templateDoc *ojson.Doc, usageResult ojson.Result) {
 	cachedTokenCount := usageResult.Get("cachedContentTokenCount").Int()
-	template, _ = sjson.SetBytes(template, "usage.completion_tokens", usageResult.Get("candidatesTokenCount").Int()+usageResult.Get("thoughtsTokenCount").Int())
+	_ = templateDoc.Set("usage.completion_tokens", usageResult.Get("candidatesTokenCount").Int()+usageResult.Get("thoughtsTokenCount").Int())
 	if totalTokenCountResult := usageResult.Get("totalTokenCount"); totalTokenCountResult.Exists() {
-		template, _ = sjson.SetBytes(template, "usage.total_tokens", totalTokenCountResult.Int())
+		_ = templateDoc.Set("usage.total_tokens", totalTokenCountResult.Int())
 	}
 	promptTokenCount := usageResult.Get("promptTokenCount").Int()
 	thoughtsTokenCount := usageResult.Get("thoughtsTokenCount").Int()
-	template, _ = sjson.SetBytes(template, "usage.prompt_tokens", promptTokenCount)
+	_ = templateDoc.Set("usage.prompt_tokens", promptTokenCount)
 	if thoughtsTokenCount > 0 {
-		template, _ = sjson.SetBytes(template, "usage.completion_tokens_details.reasoning_tokens", thoughtsTokenCount)
+		_ = templateDoc.Set("usage.completion_tokens_details.reasoning_tokens", thoughtsTokenCount)
 	}
 	if cachedTokenCount > 0 {
-		var err error
-		template, err = sjson.SetBytes(template, "usage.prompt_tokens_details.cached_tokens", cachedTokenCount)
-		if err != nil {
-			log.Warnf("antigravity openai response: failed to set cached_tokens: %v", err)
+		if errSet := templateDoc.Set("usage.prompt_tokens_details.cached_tokens", cachedTokenCount); errSet != nil {
+			log.Warnf("antigravity openai response: failed to set cached_tokens: %v", errSet)
 		}
 	}
-	return template
 }
 
 // ConvertAntigravityResponseToOpenAINonStream converts a non-streaming Antigravity response to a non-streaming OpenAI response.
@@ -332,10 +706,11 @@ func setOpenAIUsageMetadata(template []byte, usageResult gjson.Result) []byte {
 // Returns:
 //   - []byte: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertAntigravityResponseToOpenAINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []byte {
-	responseResult := gjson.GetBytes(rawJSON, "response")
+	responseResult := ojson.GetBytesNoCopy(rawJSON, "response")
 	if responseResult.Exists() {
 		responseJSON := restoreAntigravityOpenAIFunctionNames([]byte(responseResult.Raw), originalRequestRawJSON)
-		return ConvertGeminiResponseToOpenAINonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, responseJSON, param)
+		// Function names are already restored above; pass nil for originalRequestRawJSON to prevent double restoration.
+		return ConvertGeminiResponseToOpenAINonStream(ctx, modelName, nil, requestRawJSON, responseJSON, param)
 	}
 	return []byte{}
 }
@@ -345,7 +720,8 @@ func restoreAntigravityOpenAIFunctionNames(rawJSON, originalRequestRawJSON []byt
 	if len(nameMap) == 0 {
 		return rawJSON
 	}
-	candidates := gjson.GetBytes(rawJSON, "candidates")
+	var rawDoc *ojson.Doc
+	candidates := ojson.GetBytesNoCopy(rawJSON, "candidates")
 	for candidateIndex, candidate := range candidates.Array() {
 		for partIndex, part := range candidate.Get("content.parts").Array() {
 			for _, field := range []string{"functionCall", "functionResponse"} {
@@ -355,13 +731,19 @@ func restoreAntigravityOpenAIFunctionNames(rawJSON, originalRequestRawJSON []byt
 					continue
 				}
 				restoredName := util.RestoreSanitizedToolName(nameMap, name)
-				if nameResult.Type == gjson.String && restoredName == name {
+				if nameResult.Type == ojson.String && restoredName == name {
 					continue
 				}
+				if rawDoc == nil {
+					rawDoc = ojson.NewDoc(rawJSON)
+				}
 				path := fmt.Sprintf("candidates.%d.content.parts.%d.%s.name", candidateIndex, partIndex, field)
-				rawJSON, _ = sjson.SetBytes(rawJSON, path, restoredName)
+				_ = rawDoc.Set(path, restoredName)
 			}
 		}
+	}
+	if rawDoc != nil {
+		return rawDoc.Bytes()
 	}
 	return rawJSON
 }

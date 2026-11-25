@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/MoeForge/moego/base64"
 	"net"
 	"net/http"
 	"net/url"
@@ -48,7 +48,7 @@ func Parse(raw string) (Setting, error) {
 		return setting, nil
 	}
 
-	if strings.EqualFold(trimmed, "direct") || strings.EqualFold(trimmed, "none") {
+	if isDirectMode(trimmed) {
 		setting.Mode = ModeDirect
 		return setting, nil
 	}
@@ -106,6 +106,15 @@ func NewDirectTransport() *http.Transport {
 	return clone
 }
 
+// socksForwardDialer dials the SOCKS5 proxy itself. It enables TCP keepalive
+// matching net/http.DefaultTransport without setting a fixed dial timeout,
+// relying on caller context deadlines and cancellation to bound dials:
+// proxy.Direct would leave keepalive at the OS default of hours, which lets a
+// silently dead peer pin an otherwise reusable connection.
+func socksForwardDialer() *net.Dialer {
+	return &net.Dialer{KeepAlive: 30 * time.Second}
+}
+
 // BuildHTTPTransport constructs an HTTP transport for the provided proxy setting.
 func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
 	setting, errParse := Parse(raw)
@@ -126,14 +135,23 @@ func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
 				password, _ := setting.URL.User.Password()
 				proxyAuth = &proxy.Auth{User: username, Password: password}
 			}
-			dialer, errSOCKS5 := proxy.SOCKS5("tcp", setting.URL.Host, proxyAuth, proxy.Direct)
+			dialer, errSOCKS5 := proxy.SOCKS5("tcp", setting.URL.Host, proxyAuth, socksForwardDialer())
 			if errSOCKS5 != nil {
 				return nil, setting.Mode, fmt.Errorf("create SOCKS5 dialer failed: %w", errSOCKS5)
 			}
 			transport := cloneDefaultTransport()
 			transport.Proxy = nil
-			transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
+			if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
+				transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+					if ctx == nil {
+						ctx = context.Background()
+					}
+					return contextDialer.DialContext(ctx, network, addr)
+				}
+			} else {
+				transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				}
 			}
 			return transport, setting.Mode, nil
 		}
@@ -348,11 +366,19 @@ func proxyAuthorization(user *url.Userinfo) string {
 	return "Basic " + encoded
 }
 
-// Redact returns a log-safe proxy URL with credentials and path-like data removed.
+func isDirectMode(trimmed string) bool {
+	return strings.EqualFold(trimmed, "direct") || strings.EqualFold(trimmed, "none")
+}
+
+// Redact returns a log-safe proxy setting, preserving direct-mode keywords and
+// removing credentials and path-like data from proxy URLs.
 func Redact(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
+	}
+	if isDirectMode(trimmed) {
+		return trimmed
 	}
 
 	parsedURL, errParse := url.Parse(trimmed)

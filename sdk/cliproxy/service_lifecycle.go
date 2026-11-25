@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -63,6 +64,7 @@ func (s *Service) Run(ctx context.Context) error {
 		forceHomeRuntimeConfig(s.cfg)
 		cfg = s.cfg
 		s.cfgMu.Unlock()
+		s.applyKVStoreConfig(cfg)
 		redisqueue.SetUsageStatisticsEnabled(true)
 	}
 
@@ -78,6 +80,7 @@ func (s *Service) Run(ctx context.Context) error {
 		if errEnsureAuthDir := s.ensureAuthDir(); errEnsureAuthDir != nil {
 			return errEnsureAuthDir
 		}
+		s.applyKVStoreConfig(cfg)
 	}
 
 	s.applyRetryConfig(cfg)
@@ -105,6 +108,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	if !homeEnabled {
+		s.startCopilotCatalogRefresh(ctx)
 		tokenResult, err := s.tokenProvider.Load(ctx, cfg)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return err
@@ -270,6 +274,17 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		if runCancel != nil {
 			runCancel()
 		}
+		s.cfgMu.RLock()
+		catalogs := s.copilotCatalogs
+		s.cfgMu.RUnlock()
+		if catalogs != nil {
+			catalogs.cancel()
+			select {
+			case <-catalogs.done:
+			case <-ctx.Done():
+				shutdownErr = ctx.Err()
+			}
+		}
 
 		s.homeLifecycleMu.Lock()
 		if supervisor := s.homeSupervisor; supervisor != nil {
@@ -390,6 +405,14 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		if errShutdownKV := s.shutdownKVStore(); errShutdownKV != nil {
+			log.Errorf("failed to stop local kv store: %v", errShutdownKV)
+			if shutdownErr == nil {
+				shutdownErr = errShutdownKV
+			}
+		}
+
+		helps.RetireProxyPoolPublisher(s.proxyPoolPublisher)
 		usage.StopDefault()
 	})
 	return shutdownErr
@@ -429,4 +452,13 @@ func (s *Service) startModelCatalogUpdaters(ctx context.Context) {
 		proxyURL = cfg.ProxyURL
 	}
 	executor.StartXAIVersionUpdater(ctx, proxyURL)
+	sdkAuth.StartAntigravityVersionUpdaterWithProxyProvider(ctx, s.antigravityVersionProxyURL)
+}
+
+func (s *Service) antigravityVersionProxyURL() string {
+	cfg := s.currentConfig()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.ProxyURL
 }

@@ -39,6 +39,11 @@ type VertexCompatKey struct {
 	// ProxyURL optionally overrides the global proxy for this API key.
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
 
+	// ConnectionPool configures upstream connection reuse for this credential.
+	// Omitted disables pooling (preserving the fresh-transport-per-request default);
+	// pools stay per credential, so opting in never shares connections with another key.
+	ConnectionPool *ProxyConnectionPoolConfig `yaml:"connection-pool,omitempty" json:"connection-pool,omitempty"`
+
 	// Headers optionally adds extra HTTP headers for requests sent with this key.
 	// Commonly used for cookies, user-agent, and other authentication headers.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
@@ -56,6 +61,9 @@ type VertexCompatKey struct {
 	// RequestRetry optionally overrides the global request-retry for this credential.
 	// Nil or a negative value means "use the global request-retry". 0 disables additional retry rounds.
 	RequestRetry *int `yaml:"request-retry,omitempty" json:"request-retry,omitempty"`
+
+	// RequestScopedErrors configures custom classification rules for upstream errors.
+	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
 
 	// Interactions optionally enables native Vertex Interactions API routing for this key.
 	Interactions *bool `yaml:"interactions,omitempty" json:"interactions,omitempty"`
@@ -124,6 +132,7 @@ func (cfg *Config) SanitizeVertexCompatKeys() {
 		entry.OpenAPILocation = strings.TrimSpace(entry.OpenAPILocation)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		entry.RequestScopedErrors = sanitizeRequestScopedErrorRules(entry.RequestScopedErrors)
 
 		// Sanitize models: remove entries without valid model name
 		sanitizedModels := make([]VertexCompatModel, 0, len(entry.Models))
@@ -136,8 +145,8 @@ func (cfg *Config) SanitizeVertexCompatKeys() {
 		}
 		entry.Models = sanitizedModels
 
-		// Use API key + base URL as uniqueness key
-		uniqueKey := entry.APIKey + "|" + entry.BaseURL
+		// Use API key + base URL + connection-pool settings as uniqueness key
+		uniqueKey := entry.APIKey + "|" + entry.BaseURL + "\x00" + FormatConnectionPoolDedupID(entry.ConnectionPool)
 		if _, exists := seen[uniqueKey]; exists {
 			continue
 		}

@@ -1,12 +1,16 @@
 package registry
 
 import (
-	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/MoeForge/moego/json"
 )
 
 func TestCodexConfigurationUpdateCapability(t *testing.T) {
+	// Counterexample: present in every tier without support_configuration_update.
+	const incapableModelID = "gpt-5.6-luna"
 	for _, tier := range []struct {
 		name    string
 		models  func() []*ModelInfo
@@ -24,13 +28,13 @@ func TestCodexConfigurationUpdateCapability(t *testing.T) {
 					byID[info.ID] = info
 				}
 			}
-			for _, id := range append([]string{"gpt-5.5"}, tier.capable...) {
+			for _, id := range append([]string{incapableModelID}, tier.capable...) {
 				info := byID[id]
 				if info == nil {
 					t.Errorf("%s is missing", id)
 					continue
 				}
-				want := id != "gpt-5.5"
+				want := id != incapableModelID
 				if info.SupportConfigurationUpdate != want {
 					t.Errorf("%s configuration_update = %v, want %v", id, info.SupportConfigurationUpdate, want)
 				}
@@ -178,6 +182,94 @@ func TestWithXAIBuiltinsIncludesVideo15GAAndPreviewAlias(t *testing.T) {
 	}
 }
 
+func TestGetXAIModelsPreservesVideo15LiteAfterCatalogRefresh(t *testing.T) {
+	const liteID = "grok-imagine-video-1.5-lite"
+	original := getModels()
+	t.Cleanup(func() {
+		modelsCatalogStore.mu.Lock()
+		modelsCatalogStore.data = original
+		modelsCatalogStore.mu.Unlock()
+	})
+
+	refreshed := *original
+	remoteModel := &ModelInfo{ID: "refreshed-xai-model", OwnedBy: "xai", Type: "xai", DisplayName: "Refreshed model"}
+	refreshed.XAI = []*ModelInfo{remoteModel}
+	payload, err := json.Marshal(&refreshed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishCatalogBytes(payload); err != nil {
+		t.Fatalf("publish catalog without Lite: %v", err)
+	}
+
+	models := GetXAIModels()
+	foundLite, foundRemote := false, false
+	for _, model := range models {
+		if model.ID == liteID {
+			foundLite = true
+			if model.OwnedBy != "xai" || model.Type != "xai" ||
+				!reflect.DeepEqual(model.SupportedInputModalities, []string{"text", "image"}) ||
+				!reflect.DeepEqual(model.SupportedOutputModalities, []string{"video"}) {
+				t.Fatalf("Lite lost xAI video capabilities after catalog refresh: %#v", model)
+			}
+		}
+		if model.ID == remoteModel.ID {
+			foundRemote = true
+			if !reflect.DeepEqual(model, remoteModel) {
+				t.Fatalf("refreshed model = %#v, want %#v", model, remoteModel)
+			}
+		}
+	}
+	if !foundLite || !foundRemote {
+		t.Fatalf("catalog lost Lite or refreshed model: Lite=%v, refreshed=%v", foundLite, foundRemote)
+	}
+
+	const clientID = "test-xai-lite-catalog-refresh"
+	registryRef := GetGlobalRegistry()
+	registryRef.RegisterClient(clientID, "xai", models)
+	t.Cleanup(func() { registryRef.UnregisterClient(clientID) })
+	if !registryRef.ClientSupportsModel(clientID, liteID) {
+		t.Fatal("xAI credential registration lost Lite support after catalog refresh")
+	}
+	if providers := registryRef.GetModelProviders(liteID); !reflect.DeepEqual(providers, []string{"xai"}) {
+		t.Fatalf("Lite providers = %v, want [xai]", providers)
+	}
+}
+
+func TestWithXAIBuiltinsReplacesVideo15LiteWithoutMutatingCatalog(t *testing.T) {
+	const liteID = "grok-imagine-video-1.5-lite"
+	stale := &ModelInfo{ID: liteID, DisplayName: "Stale Lite", SupportedInputModalities: []string{"text"}}
+	duplicate := &ModelInfo{ID: " GROK-IMAGINE-VIDEO-1.5-LITE ", DisplayName: "Duplicate Lite"}
+	custom := &ModelInfo{ID: "custom-xai-model", DisplayName: "Custom model"}
+	input := []*ModelInfo{stale, custom, duplicate}
+	for range 2 {
+		models := WithXAIBuiltins(input)
+		liteCount := 0
+		foundCustom := false
+		for _, model := range models {
+			if strings.EqualFold(strings.TrimSpace(model.ID), liteID) {
+				liteCount++
+				if model.ID != liteID || model.DisplayName != "Grok Imagine Video 1.5 Lite" ||
+					!reflect.DeepEqual(model.SupportedInputModalities, []string{"text", "image"}) {
+					t.Fatalf("Lite builtin did not replace stale metadata: %#v", model)
+				}
+				model.SupportedInputModalities[0] = "mutated"
+			}
+			if model.ID == custom.ID {
+				foundCustom = reflect.DeepEqual(model, custom)
+			}
+		}
+		if liteCount != 1 || !foundCustom {
+			t.Fatalf("Lite count = %d, custom preserved = %v, want 1 and true", liteCount, foundCustom)
+		}
+	}
+	if input[0] != stale || input[1] != custom || input[2] != duplicate ||
+		stale.DisplayName != "Stale Lite" || !reflect.DeepEqual(stale.SupportedInputModalities, []string{"text"}) ||
+		duplicate.ID != " GROK-IMAGINE-VIDEO-1.5-LITE " || duplicate.DisplayName != "Duplicate Lite" {
+		t.Fatal("builtin merge mutated the input catalog")
+	}
+}
+
 func TestAntigravityWebSearchModelForRequiresRequestedModelCapability(t *testing.T) {
 	registryRef := GetGlobalRegistry()
 	registryRef.RegisterClient("test-antigravity-websearch-route", "antigravity", []*ModelInfo{
@@ -245,12 +337,15 @@ func TestValidateModelsCatalog_Meta(t *testing.T) {
 	}
 }
 
-func TestWithCodexBuiltinsIncludesImage25Models(t *testing.T) {
+func TestWithCodexBuiltinsIncludesImage25And26Models(t *testing.T) {
 	models := WithCodexBuiltins(nil)
 	expectedModels := map[string]string{
 		"gpt-image-2.5-flare":    "GPT Image 2.5 Flare",
 		"gpt-image-2.5-sunburst": "GPT Image 2.5 Sunburst",
 		"gpt-image-2.5":          "GPT Image 2.5",
+		"gpt-image-2.6-flare":    "GPT Image 2.6 Flare",
+		"gpt-image-2.6-sunburst": "GPT Image 2.6 Sunburst",
+		"gpt-image-2.6":          "GPT Image 2.6",
 	}
 
 	found := make(map[string]*ModelInfo)
@@ -301,57 +396,57 @@ func TestGetDevinModelsFallback(t *testing.T) {
 	foundDeepSeekV4Flash := false
 	foundDeepSeekV41Flash := false
 	for _, m := range devinModels {
-		if m != nil && m.ID == "devin/swe-2" {
+		if m != nil && m.ID == "swe-2" {
 			foundSWE2 = true
 			if m.Type != "devin" {
-				t.Errorf("devin/swe-2 Type = %q, want devin", m.Type)
+				t.Errorf("swe-2 Type = %q, want devin", m.Type)
 			}
 		}
-		if m != nil && m.ID == "devin/claude-fable-5-1" {
+		if m != nil && m.ID == "claude-fable-5-1" {
 			foundFable = true
 		}
-		if m != nil && m.ID == "devin/gemini-3-8-flash" {
+		if m != nil && m.ID == "gemini-3-8-flash" {
 			foundGemini38 = true
 			if m.OwnedBy != "google" {
-				t.Errorf("devin/gemini-3-8-flash OwnedBy = %q, want google", m.OwnedBy)
+				t.Errorf("gemini-3-8-flash OwnedBy = %q, want google", m.OwnedBy)
 			}
 		}
-		if m != nil && m.ID == "devin/grok-4-6" {
+		if m != nil && m.ID == "grok-4-6" {
 			foundGrok46 = true
 			if m.OwnedBy != "xai" {
-				t.Errorf("devin/grok-4-6 OwnedBy = %q, want xai", m.OwnedBy)
+				t.Errorf("grok-4-6 OwnedBy = %q, want xai", m.OwnedBy)
 			}
 		}
-		if m != nil && m.ID == "devin/deepseek-v4-flash" {
+		if m != nil && m.ID == "deepseek-v4-flash" {
 			foundDeepSeekV4Flash = true
 			if m.OwnedBy != "deepseek" {
-				t.Errorf("devin/deepseek-v4-flash OwnedBy = %q, want deepseek", m.OwnedBy)
+				t.Errorf("deepseek-v4-flash OwnedBy = %q, want deepseek", m.OwnedBy)
 			}
 		}
-		if m != nil && m.ID == "devin/deepseek-v4-1-flash-1017" {
+		if m != nil && m.ID == "deepseek-v4-1-flash-1017" {
 			foundDeepSeekV41Flash = true
 			if m.OwnedBy != "deepseek" {
-				t.Errorf("devin/deepseek-v4-1-flash-1017 OwnedBy = %q, want deepseek", m.OwnedBy)
+				t.Errorf("deepseek-v4-1-flash-1017 OwnedBy = %q, want deepseek", m.OwnedBy)
 			}
 		}
 	}
 	if !foundSWE2 {
-		t.Error("expected devin/swe-2 in GetDevinModels()")
+		t.Error("expected swe-2 in GetDevinModels()")
 	}
 	if !foundFable {
-		t.Error("expected devin/claude-fable-5-1 in GetDevinModels()")
+		t.Error("expected claude-fable-5-1 in GetDevinModels()")
 	}
 	if !foundGemini38 {
-		t.Error("expected devin/gemini-3-8-flash in GetDevinModels()")
+		t.Error("expected gemini-3-8-flash in GetDevinModels()")
 	}
 	if !foundGrok46 {
-		t.Error("expected devin/grok-4-6 in GetDevinModels()")
+		t.Error("expected grok-4-6 in GetDevinModels()")
 	}
 	if !foundDeepSeekV4Flash {
-		t.Error("expected devin/deepseek-v4-flash in GetDevinModels()")
+		t.Error("expected deepseek-v4-flash in GetDevinModels()")
 	}
 	if !foundDeepSeekV41Flash {
-		t.Error("expected devin/deepseek-v4-1-flash-1017 in GetDevinModels()")
+		t.Error("expected deepseek-v4-1-flash-1017 in GetDevinModels()")
 	}
 
 	byChannel := GetStaticModelDefinitionsByChannel("devin")

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
-	"github.com/tidwall/gjson"
 )
 
 // antigravityNoFinishReasonSSE mirrors a real upstream stream captured from
@@ -195,7 +195,7 @@ func TestAntigravityStreamDoesNotEmitClaudeMessageStopOnReadError(t *testing.T) 
 	}
 }
 
-func TestAntigravityStreamDoesNotFinalizeEmptyUpstreamStream(t *testing.T) {
+func TestAntigravityStreamRejectsEmptyUpstreamStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -239,16 +239,18 @@ func TestAntigravityStreamDoesNotFinalizeEmptyUpstreamStream(t *testing.T) {
 			if errExecute != nil {
 				t.Fatalf("ExecuteStream() error = %v", errExecute)
 			}
+			var streamErr error
 			for chunk := range result.Chunks {
 				if chunk.Err != nil {
-					t.Fatalf("unexpected stream error: %v", chunk.Err)
+					streamErr = chunk.Err
 				}
-				if finish := gjson.GetBytes(chunk.Payload, "candidates.0.finishReason").String(); finish != "" {
-					t.Fatalf("empty upstream stream must not synthesize a terminal chunk: %s", chunk.Payload)
+				if len(chunk.Payload) != 0 {
+					t.Fatalf("empty upstream stream emitted payload: %s", chunk.Payload)
 				}
-				if finish := gjson.GetBytes(chunk.Payload, "choices.0.finish_reason").String(); finish != "" {
-					t.Fatalf("empty upstream stream must not synthesize a terminal chunk: %s", chunk.Payload)
-				}
+			}
+			statusError, ok := streamErr.(interface{ StatusCode() int })
+			if !ok || statusError.StatusCode() != http.StatusBadGateway {
+				t.Fatalf("empty upstream stream error = %v, want 502", streamErr)
 			}
 		})
 	}
@@ -262,28 +264,28 @@ func TestAntigravityStreamSynthesizesGeminiTerminalChunkWithUsage(t *testing.T) 
 		`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
 
 	terminal := chunks[len(chunks)-1]
-	if fr := gjson.GetBytes(terminal, "candidates.0.finishReason").String(); fr != "STOP" {
+	if fr := ojson.GetBytes(terminal, "candidates.0.finishReason").String(); fr != "STOP" {
 		t.Fatalf("terminal finishReason = %q, want STOP", fr)
 	}
-	if role := gjson.GetBytes(terminal, "candidates.0.content.role").String(); role != "model" {
+	if role := ojson.GetBytes(terminal, "candidates.0.content.role").String(); role != "model" {
 		t.Fatalf("terminal content role = %q, want model", role)
 	}
-	if got := gjson.GetBytes(terminal, "usageMetadata.totalTokenCount").Int(); got != 153720 {
+	if got := ojson.GetBytes(terminal, "usageMetadata.totalTokenCount").Int(); got != 153720 {
 		t.Fatalf("terminal totalTokenCount = %d, want 153720", got)
 	}
-	if got := gjson.GetBytes(terminal, "usageMetadata.promptTokenCount").Int(); got != 153609 {
+	if got := ojson.GetBytes(terminal, "usageMetadata.promptTokenCount").Int(); got != 153609 {
 		t.Fatalf("terminal promptTokenCount = %d, want 153609", got)
 	}
-	if got := gjson.GetBytes(terminal, "modelVersion").String(); got != "gemini-3.7-flash" {
+	if got := ojson.GetBytes(terminal, "modelVersion").String(); got != "gemini-3.7-flash" {
 		t.Fatalf("terminal modelVersion = %q, want gemini-3.7-flash", got)
 	}
-	if got := gjson.GetBytes(terminal, "responseId").String(); got != "resp-nofr" {
+	if got := ojson.GetBytes(terminal, "responseId").String(); got != "resp-nofr" {
 		t.Fatalf("terminal responseId = %q, want resp-nofr", got)
 	}
 
 	var finishReasonCount int
 	for _, chunk := range chunks {
-		if gjson.GetBytes(chunk, "candidates.0.finishReason").String() != "" {
+		if ojson.GetBytes(chunk, "candidates.0.finishReason").String() != "" {
 			finishReasonCount++
 		}
 	}
@@ -300,26 +302,95 @@ func TestAntigravityStreamSynthesizesOpenAIToolCallsFinishReason(t *testing.T) {
 		`{"model":"gemini-3.7-flash","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 
 	terminal := chunks[len(chunks)-1]
-	if fr := gjson.GetBytes(terminal, "choices.0.finish_reason").String(); fr != "tool_calls" {
+	if fr := ojson.GetBytes(terminal, "choices.0.finish_reason").String(); fr != "tool_calls" {
 		t.Fatalf("terminal finish_reason = %q, want tool_calls", fr)
 	}
-	if got := gjson.GetBytes(terminal, "usage.total_tokens").Int(); got != 153720 {
+	if got := ojson.GetBytes(terminal, "usage.total_tokens").Int(); got != 153720 {
 		t.Fatalf("terminal total_tokens = %d, want 153720", got)
 	}
-	if got := gjson.GetBytes(terminal, "usage.prompt_tokens").Int(); got != 153609 {
+	if got := ojson.GetBytes(terminal, "usage.prompt_tokens").Int(); got != 153609 {
 		t.Fatalf("terminal prompt_tokens = %d, want 153609", got)
 	}
-	if got := gjson.GetBytes(terminal, "model").String(); got != "gemini-3.7-flash" {
+	if got := ojson.GetBytes(terminal, "model").String(); got != "gemini-3.7-flash" {
 		t.Fatalf("terminal model = %q, want gemini-3.7-flash", got)
 	}
 
 	var finishReasonCount int
 	for _, chunk := range chunks {
-		if gjson.GetBytes(chunk, "choices.0.finish_reason").String() != "" {
+		if ojson.GetBytes(chunk, "choices.0.finish_reason").String() != "" {
 			finishReasonCount++
 		}
 	}
 	if finishReasonCount != 1 {
 		t.Fatalf("expected exactly one finish_reason chunk, got %d", finishReasonCount)
+	}
+}
+
+func TestAntigravityAssemblyReplacesOnlyContentParts(t *testing.T) {
+	for _, metadata := range []string{
+		`"groundingMetadata":{"webSearchQueries":[]}`,
+		`"marker":"__cpa_parts_placeholder__"`,
+	} {
+		t.Run(metadata, func(t *testing.T) {
+			raw := []byte(`{"response":{"candidates":[{` + metadata + `,"content":{"role":"model","parts":[]},"finishReason":"STOP"}]}}`)
+			exec := &AntigravityExecutor{}
+			first := []byte(`{"response":{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}}`)
+			out := exec.convertStreamChunksToNonStream([][]byte{first, raw})
+			if !ojson.ValidBytes(out) || ojson.GetBytes(out, "response.candidates.0.content.parts.0.text").String() != "hello" {
+				t.Fatalf("assembled parts replaced the wrong value: %s", out)
+			}
+			before := ojson.GetBytes(raw, "response.candidates.0")
+			after := ojson.GetBytes(out, "response.candidates.0")
+			if before.Get("groundingMetadata").Raw != after.Get("groundingMetadata").Raw ||
+				before.Get("marker").Raw != after.Get("marker").Raw {
+				t.Fatalf("assembly changed unrelated metadata: %s", out)
+			}
+		})
+	}
+}
+
+func TestAntigravityAssemblyPreservesGroundingMetadataFromEarlierChunk(t *testing.T) {
+	exec := &AntigravityExecutor{}
+	chunks := [][]byte{
+		[]byte(`{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Search result answer."}]},"groundingMetadata":{"webSearchQueries":["example query"],"groundingChunks":[{"web":{"uri":"https://example.com","title":"Example"}}],"groundingSupports":[{"segment":{"startIndex":0,"endIndex":6},"groundingChunkIndices":[0]}]}}],"modelVersion":"gemini-3-pro","responseId":"resp-ground-1"}}`),
+		[]byte(`{"response":{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5,"totalTokenCount":17}}}`),
+	}
+
+	out := exec.convertStreamChunksToNonStream(chunks)
+	grounding := ojson.GetBytes(out, "response.candidates.0.groundingMetadata")
+	if !grounding.Exists() {
+		t.Fatalf("assembled response dropped groundingMetadata from earlier chunk: %s", out)
+	}
+	if got := grounding.Get("webSearchQueries.0").String(); got != "example query" {
+		t.Fatalf("grounding web search query = %q, want %q; out=%s", got, "example query", out)
+	}
+	if got := grounding.Get("groundingChunks.0.web.uri").String(); got != "https://example.com" {
+		t.Fatalf("grounding chunk URI = %q, want %q; out=%s", got, "https://example.com", out)
+	}
+	groundingIndex := grounding.Get("groundingSupports.0.groundingChunkIndices.0")
+	if !groundingIndex.Exists() || groundingIndex.Raw != "0" {
+		t.Fatalf("grounding support index = %q, want 0; out=%s", groundingIndex.Raw, out)
+	}
+}
+
+func TestAntigravityStreamPreservesQuotedFilterNoticeWithUsageMetadata(t *testing.T) {
+	quotedNotice := "This request was blocked by Gemini's filters. They can occasionally trigger by mistake on safe coding, security, or biology-related queries. Please try rephrasing your prompt. You can [send feedback](https://ai.google.dev/gemini-api/docs/troubleshooting#file-bug) or read more about [our policies here](https://policies.google.com/terms/generative-ai/use-policy)."
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"response":{"candidates":[{"content":{"parts":[{"text":"`+quotedNotice+`"}]}}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":40,"totalTokenCount":52}}}`+"\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	chunks := collectAntigravityStream(t, server.URL, sdktranslator.FormatGemini, sdktranslator.FormatGemini,
+		`{"contents":[{"role":"user","parts":[{"text":"explain the filter message"}]}]}`)
+	var joined bytes.Buffer
+	for _, chunk := range chunks {
+		joined.Write(chunk)
+	}
+	if !bytes.Contains(joined.Bytes(), []byte(quotedNotice)) {
+		t.Fatalf("expected quoted filter notice in stream output, got %s", joined.String())
 	}
 }

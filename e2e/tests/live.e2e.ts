@@ -87,7 +87,7 @@ test(
       headers: {
         ...anthropic,
         'anthropic-beta': 'claude-code-20250219',
-        'user-agent': 'claude-cli/2.1.280 (external, cli)',
+        'user-agent': 'claude-cli/2.1.332 (external, cli)',
         'x-app': 'cli',
         'X-Claude-Code-Session-Id': session,
       },
